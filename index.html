@@ -178,6 +178,15 @@
       <div class="game-header">
         <div class="game-title-sm">🧬 PROJEKT GENESIS</div>
         <div id="phase-indicator" class="phase-indicator">Fall 1 von 7</div>
+        <button
+          id="multiplayer-connection-indicator"
+          class="connection-indicator hidden"
+          type="button"
+          onclick="requestMultiplayerSync()"
+        >
+          <span class="connection-indicator-dot"></span>
+          <span id="multiplayer-connection-label">Lokaler Modus</span>
+        </button>
         <div style="color:var(--text-dim);font-size:0.88em" id="current-role-display">Rolle: –</div>
       </div>
       <div class="progress-bar">

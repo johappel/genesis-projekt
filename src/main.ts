@@ -49,6 +49,8 @@ const MULTIPLAYER_RECOVERY_TIMEOUT_MS = 2500;
 
 type PendingMultiplayerRequestKind = 'role-claim' | 'vote' | 'round-close';
 
+type MultiplayerIndicatorTone = 'local' | 'connected' | 'waiting' | 'syncing' | 'error';
+
 let pendingMultiplayerRequest:
   | {
       kind: PendingMultiplayerRequestKind;
@@ -138,6 +140,66 @@ function setMultiplayerStatus(message: string): void {
   updateMultiplayerStatusUI();
 }
 
+function requestMultiplayerSync(): void {
+  if (!multiplayer) {
+    return;
+  }
+
+  clearPendingMultiplayerRequest();
+  setMultiplayerStatus('Synchronisierung manuell angefordert.');
+  void multiplayer.requestStateSync().catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
+    setMultiplayerStatus(`Manuelle Synchronisierung fehlgeschlagen. ${detail}`);
+  });
+}
+
+function getMultiplayerIndicatorState(): { tone: MultiplayerIndicatorTone; label: string } {
+  if (!isMultiplayerMode()) {
+    return {
+      tone: 'local',
+      label: 'Lokaler Modus',
+    };
+  }
+
+  if (pendingMultiplayerRequest?.kind === 'vote') {
+    return {
+      tone: 'waiting',
+      label: 'Stimme ausstehend',
+    };
+  }
+
+  if (pendingMultiplayerRequest) {
+    return {
+      tone: 'syncing',
+      label: 'Bestätigung läuft',
+    };
+  }
+
+  const lowerStatus = multiplayerStatusMessage.toLowerCase();
+  if (
+    lowerStatus.includes('abgelehnt')
+    || lowerStatus.includes('fehlgeschlagen')
+    || lowerStatus.includes('keine bestätigung')
+  ) {
+    return {
+      tone: 'error',
+      label: 'Sync prüfen',
+    };
+  }
+
+  if (lowerStatus.includes('synchronisiert') || lowerStatus.includes('state-sync')) {
+    return {
+      tone: 'syncing',
+      label: 'Synchronisiert',
+    };
+  }
+
+  return {
+    tone: 'connected',
+    label: multiplayer?.isHost ? 'Relay verbunden · Host' : 'Relay verbunden',
+  };
+}
+
 function clearPendingMultiplayerRequest(): void {
   if (!pendingMultiplayerRequest) {
     return;
@@ -184,12 +246,25 @@ function updateMultiplayerStatusUI(): void {
   const roomBox = document.getElementById('multiplayer-room-box');
   const roomCode = document.getElementById('multiplayer-room-code') as HTMLInputElement | null;
   const inviteLink = document.getElementById('multiplayer-invite-link') as HTMLInputElement | null;
+  const indicator = document.getElementById('multiplayer-connection-indicator') as HTMLButtonElement | null;
+  const indicatorLabel = document.getElementById('multiplayer-connection-label');
 
   if (startStatus) {
     startStatus.textContent = multiplayerStatusMessage || 'Kein Relay-Mehrspieler aktiv.';
   }
   if (rolesStatus) {
     rolesStatus.textContent = multiplayerStatusMessage || 'Kein Relay-Mehrspieler aktiv.';
+  }
+
+  if (indicator && indicatorLabel) {
+    const state = getMultiplayerIndicatorState();
+    indicator.className = `connection-indicator connection-${state.tone}${isMultiplayerMode() ? '' : ' hidden'}`;
+    indicatorLabel.textContent = state.label;
+    indicator.disabled = !isMultiplayerMode();
+    indicator.title = isMultiplayerMode()
+      ? `${multiplayerStatusMessage || state.label} Klicken für manuelle Synchronisierung.`
+      : 'Kein Relay-Mehrspieler aktiv.';
+    indicator.setAttribute('aria-label', indicator.title);
   }
 
   if (!roomBox || !roomCode || !inviteLink) {
@@ -214,6 +289,18 @@ function updateRoleFlowAfterTransport(): void {
   if (activeScreen === 'screen-game') {
     renderCase();
   }
+}
+
+function resetTransientMultiplayerUi(): void {
+  clearTimer();
+  pendingDecision = null;
+  pendingSystemicNotes = [];
+  pendingOverlayAction = 'none';
+  document.getElementById('consequence-overlay')?.classList.add('hidden');
+}
+
+function canVoteInCurrentClient(): boolean {
+  return (!isMultiplayerMode() || isCurrentRoleOwnedLocally()) && !isAwaitingVoteConfirmation();
 }
 
 function addActiveRoleById(roleId: string): void {
@@ -370,20 +457,21 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
 
   if (event.eventName === 'state-sync-sent') {
     clearPendingMultiplayerRequest();
+    resetTransientMultiplayerUi();
     state = event.snapshot.state;
     syncRoleSelectionFromOwners();
     updateRoleFlowAfterTransport();
 
     if (state.selectedRole && state.activeRoles.length >= 2) {
       showScreen('screen-game');
-      if (isCurrentRoleOwnedLocally()) {
-        showCurrentTurnPrompt('Du bist jetzt online am Zug.');
-      } else {
-        renderCase();
-      }
+      renderCase();
     }
 
-    setMultiplayerStatus(`State-Sync empfangen. Raum ${event.gameId} ist bereit.`);
+    setMultiplayerStatus(
+      isCurrentRoleOwnedLocally()
+        ? `State-Sync empfangen. Du bist jetzt am Zug.`
+        : `State-Sync empfangen. Raum ${event.gameId} ist bereit.`
+    );
     return;
   }
 
@@ -760,7 +848,12 @@ function renderCase(): void {
   updateProtocol();
   updateSidebar();
   renderScenarioPanel(caseData);
-  startDecisionTimer(caseData);
+  if (canVoteInCurrentClient()) {
+    startDecisionTimer(caseData);
+  } else {
+    clearTimer();
+    updateTimerDisplay();
+  }
 
   // Notfall-Ende prüfen
   const emergencyBadge = getEmergencyEndingBadge(state);
@@ -787,7 +880,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   const availableDecisions = getAvailableDecisions(caseData);
   const voteCount = getCurrentRoundVoteCount();
   const modeLabel = state.tieBreakOptions ? 'Stichwahl' : 'Ratsrunde';
-  const canVoteHere = (!isMultiplayerMode() || isCurrentRoleOwnedLocally()) && !isAwaitingVoteConfirmation();
+  const canVoteHere = canVoteInCurrentClient();
 
   panel.innerHTML = `
     <div class="scenario-tag ${caseData.tagClass}">${caseData.tag}</div>
@@ -1626,6 +1719,7 @@ declare global {
     resetGame: typeof resetGame;
     startRelayHost: typeof startRelayHost;
     joinRelayGame: typeof joinRelayGame;
+    requestMultiplayerSync: typeof requestMultiplayerSync;
   }
 }
 
@@ -1642,6 +1736,7 @@ window.showPaxEnding = showPaxEnding;
 window.resetGame = resetGame;
 window.startRelayHost = startRelayHost;
 window.joinRelayGame = joinRelayGame;
+window.requestMultiplayerSync = requestMultiplayerSync;
 
 // ============================================================
 // INIT
