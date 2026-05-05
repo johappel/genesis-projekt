@@ -154,6 +154,11 @@ function getCurrentCouncilPreVote(): DecisionOption | null {
   ) ?? null;
 }
 
+function getCurrentRolePosition(): number {
+  if (!state.selectedRole) return 0;
+  return state.activeRoles.findIndex((role) => role.id === state.selectedRole?.id) + 1;
+}
+
 function getRoleSelectionHint(): string {
   if (!state.activeRoles.length) {
     return 'Waehle mindestens zwei Rollen fuer eine gemeinsame Ratsrunde.';
@@ -208,6 +213,31 @@ function showCurrentTurnPrompt(details?: string): void {
   changesEl.innerHTML = `${state.tieBreakOptions
     ? '<span class="value-change-item change-shift">Stichwahl</span>'
     : `<span class="value-change-item change-shift">Stimme ${getCurrentRoundVoteCount() + 1} von ${state.activeRoles.length}</span>`}${councilPreVote ? '<span class="value-change-item change-shift">KI-Fallback aktiv</span>' : ''}`;
+  pendingOverlayAction = 'render-case';
+  overlay.classList.remove('hidden');
+}
+
+function showNextRoundPrompt(): void {
+  clearTimer();
+  ensureCouncilPreVote();
+
+  const nextCase = CASES[state.currentCase];
+  const overlay = document.getElementById('consequence-overlay');
+  const icon = document.getElementById('consequence-icon');
+  const title = document.getElementById('consequence-title');
+  const text = document.getElementById('consequence-text');
+  const reflexion = document.getElementById('consequence-reflexion');
+  const changesEl = document.getElementById('consequence-changes');
+  if (!overlay || !icon || !title || !text || !reflexion || !changesEl) return;
+
+  icon.textContent = state.selectedRole?.icon ?? '👤';
+  title.textContent = 'Nächste Runde';
+  text.textContent = `${state.selectedRole?.name ?? 'Die nächste Rolle'} ist jetzt dran.`;
+  reflexion.textContent = nextCase
+    ? `Als Nächstes liegt ${nextCase.ki} vor euch: ${nextCase.title}. Erst nach OK wird der neue Fall eingeblendet.`
+    : 'Erst nach OK wird die nächste Runde eingeblendet.';
+  changesEl.innerHTML = '<span class="value-change-item change-shift">Gerät übergeben</span>';
+
   pendingOverlayAction = 'render-case';
   overlay.classList.remove('hidden');
 }
@@ -478,7 +508,28 @@ function showVetoNotice(): void {
 }
 
 function showHandoverNotice(votedRoleName: string, nextRoleName: string): void {
-  showCurrentTurnPrompt(`${votedRoleName} hat abgestimmt. Bitte gebt das Geraet jetzt an ${nextRoleName} weiter.`);
+  clearTimer();
+  ensureCouncilPreVote();
+
+  const overlay = document.getElementById('consequence-overlay');
+  const icon = document.getElementById('consequence-icon');
+  const title = document.getElementById('consequence-title');
+  const text = document.getElementById('consequence-text');
+  const reflexion = document.getElementById('consequence-reflexion');
+  const changesEl = document.getElementById('consequence-changes');
+  const currentCase = CASES[state.currentCase];
+  if (!overlay || !icon || !title || !text || !reflexion || !changesEl) return;
+
+  icon.textContent = state.selectedRole?.icon ?? '👤';
+  title.textContent = 'Nächste Stimme';
+  text.textContent = `Jetzt stimmt Spieler ${getCurrentRolePosition()}${state.activeRoles.length ? ` von ${state.activeRoles.length}` : ''}: ${nextRoleName}.`;
+  reflexion.textContent = currentCase
+    ? `${votedRoleName} hat bereits abgestimmt. ${nextRoleName} soll jetzt über Fall ${state.currentCase + 1} abstimmen: ${currentCase.title}. Erst nach OK wird derselbe Fall für die nächste Stimme eingeblendet.`
+    : `${votedRoleName} hat bereits abgestimmt. Bitte gebt das Geraet jetzt an ${nextRoleName} weiter.`;
+  changesEl.innerHTML = '<span class="value-change-item change-shift">Gerät weitergeben</span>';
+
+  pendingOverlayAction = 'render-case';
+  overlay.classList.remove('hidden');
 }
 
 function showTieBreakNotice(
@@ -580,7 +631,7 @@ function advanceAfterRound(): void {
     return;
   }
 
-  showCurrentTurnPrompt('Die naechste Ratsrunde beginnt. Nach OK wird der neue Fall eingeblendet.');
+  showNextRoundPrompt();
 }
 
 function closeConsequence(): void {
