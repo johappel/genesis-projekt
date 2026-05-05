@@ -43,6 +43,9 @@ export interface RoleClaimedEvent extends TransportEnvelope {
   eventName: 'role-claimed';
   roleId: string;
   claimedByPlayerId: string;
+  claimStatus: 'requested' | 'accepted' | 'rejected';
+  authoritativePlayerId?: string;
+  rejectionReason?: 'ROLE_NOT_FOUND' | 'ROLE_ALREADY_TAKEN' | 'GAME_FULL' | 'PLAYER_ALREADY_HAS_ROLE';
 }
 
 export interface VoteCastEvent extends TransportEnvelope {
