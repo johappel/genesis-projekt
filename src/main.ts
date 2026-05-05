@@ -18,6 +18,7 @@ import { activateAbility, isAbilityAvailable } from './game/rules/abilities.js';
 let state: GameState = createGame();
 let pendingDecision: DecisionOption | null = null;
 let pendingSystemicNotes: string[] = [];
+const DEVELOPER_MODE = new URLSearchParams(window.location.search).has('dev');
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let timerRemaining = DECISION_TIMER_SECONDS;
@@ -26,14 +27,61 @@ function formatEffectTags(effect: Record<string, number>, kind: 'decision' | 'ov
   return Object.entries(effect)
     .filter(([, value]) => value !== 0)
     .map(([key, value]) => {
-      const label = VALUE_LABELS[key] ?? key;
-      const cls = key === 'macht'
-        ? (value > 0 ? `${kind === 'decision' ? 'effect' : 'change'}-negative` : `${kind === 'decision' ? 'effect' : 'change'}-positive`)
-        : (value > 0 ? `${kind === 'decision' ? 'effect' : 'change'}-positive` : `${kind === 'decision' ? 'effect' : 'change'}-negative`);
+      const cls = getEffectTagClass(key, value, kind);
       const itemClass = kind === 'decision' ? 'effect-tag' : 'value-change-item';
-      return `<span class="${itemClass} ${cls}">${label} ${value > 0 ? '+' : ''}${value}</span>`;
+      const label = DEVELOPER_MODE
+        ? `${VALUE_LABELS[key] ?? key} ${value > 0 ? '+' : ''}${value}`
+        : getEffectHintLabel(key, value);
+      return `<span class="${itemClass} ${cls}">${label}</span>`;
     })
     .join('');
+}
+
+function getEffectTagClass(
+  key: string,
+  value: number,
+  kind: 'decision' | 'overlay'
+): string {
+  const prefix = kind === 'decision' ? 'effect' : 'change';
+  if (key === 'macht') {
+    return `${prefix}-shift`;
+  }
+  return value > 0 ? `${prefix}-strengthens` : `${prefix}-strains`;
+}
+
+function getEffectHintLabel(key: string, value: number): string {
+  switch (key) {
+    case 'nutzen':
+      return value > 0 ? 'stärkt Versorgung' : 'belastet Versorgung';
+    case 'gerechtigkeit':
+      return value > 0 ? 'stärkt Fairness' : 'belastet Fairness';
+    case 'frieden':
+      return value > 0 ? 'stärkt Zusammenhalt' : 'belastet Zusammenhalt';
+    case 'schoepfung':
+      return value > 0 ? 'entlastet Umwelt' : 'belastet Umwelt';
+    case 'autonomie':
+      return value > 0 ? 'stärkt Mitsprache' : 'belastet Mitsprache';
+    case 'macht':
+      return value > 0 ? 'KI erhält mehr Rechte' : 'KI verliert an Bedeutung';
+    default:
+      return `${VALUE_LABELS[key] ?? key} ${value > 0 ? '+' : ''}${value}`;
+  }
+}
+
+function getValueStatusLabel(value: number): string {
+  if (value >= 4) return 'sehr stark';
+  if (value >= 2) return 'tragfähig';
+  if (value >= 0) return 'offen';
+  if (value >= -2) return 'angespannt';
+  return 'kritisch';
+}
+
+function getMachtStatusLabel(value: number): string {
+  if (value <= 2) return 'niedrig';
+  if (value <= 4) return 'begrenzt';
+  if (value <= 6) return 'spürbar';
+  if (value <= 8) return 'hoch';
+  return 'kritisch';
 }
 
 // ============================================================
@@ -115,7 +163,7 @@ function renderCase(): void {
   const roleDisp = document.getElementById('current-role-display');
   const progressFill = document.getElementById('progress-fill');
   if (phaseEl) phaseEl.textContent = `Fall ${state.currentCase + 1} von ${CASES.length}`;
-  if (roleDisp) roleDisp.textContent = `Rolle: ${state.selectedRole?.name ?? '–'}`;
+  if (roleDisp) roleDisp.textContent = `Rolle: ${state.selectedRole?.name ?? '–'}${DEVELOPER_MODE ? ' · DEV' : ''}`;
   if (progressFill) progressFill.style.width = `${(state.currentCase / CASES.length) * 100}%`;
 
   updateValuesDisplay();
@@ -171,6 +219,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
 
     <div>
       <div class="panel-title">⚡ Entscheidung treffen</div>
+      <div class="decision-guidance">${DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Was stärkt etwas, was belastet etwas, was gibt KI mehr Rechte oder nimmt ihr Bedeutung?'}</div>
       <div id="decision-timer-box" class="decision-timer">
         <div class="timer-label">
           <span>Beratungszeit</span>
@@ -310,7 +359,7 @@ function showSystemicConsequences(notes: string[]): void {
   title.textContent = 'Systemische Folgen';
   text.innerHTML = notes.map((note) => `<div style="margin-bottom:8px">${note}</div>`).join('');
   reflexion.textContent = 'Die Folgen zeigen sich nicht nur im Einzelfall, sondern im gesamten Gefüge der Stadt.';
-  changesEl.innerHTML = '<span class="value-change-item change-negative">Stadtweite Folgeeffekte aktiviert</span>';
+  changesEl.innerHTML = '<span class="value-change-item change-shift">Stadtweite Folgeeffekte aktiviert</span>';
   overlay.classList.remove('hidden');
 }
 
@@ -457,7 +506,7 @@ function updateValuesDisplay(): void {
   grid.innerHTML = allDisplayValues
     .map(({ key, val, color, pct }) => {
       const label = VALUE_LABELS[key] ?? key;
-      const display = `${val > 0 ? '+' : ''}${val}`;
+      const display = DEVELOPER_MODE ? `${val > 0 ? '+' : ''}${val}` : getValueStatusLabel(val);
       return `
       <div class="value-item" tabindex="0" onclick="openValueInfo('${key}')" onkeydown="if(event.key==='Enter')openValueInfo('${key}')">
         <div class="value-label"><span>${label}</span><span class="value-number" style="color:${color}">${display}</span></div>
@@ -471,7 +520,7 @@ function updateValuesDisplay(): void {
   const machtFill = document.getElementById('macht-bar-fill');
   const machtWarn = document.getElementById('macht-warning-text');
   const machtColor = getMachtColor(state.macht);
-  if (machtVal) machtVal.textContent = `${state.macht} / 10`;
+  if (machtVal) machtVal.textContent = DEVELOPER_MODE ? `${state.macht} / 10` : getMachtStatusLabel(state.macht);
   if (machtFill) {
     machtFill.style.width = `${(state.macht / 10) * 100}%`;
     machtFill.style.background = machtColor;
@@ -719,7 +768,10 @@ function renderEndScreen(ending: typeof ENDINGS[0]): void {
     finalGrid.innerHTML = Object.entries(allVals)
       .map(([k, v]) => {
         const color = k === 'macht' ? getMachtColor(v) : getValueColor(v);
-        return `<div class="final-value-card"><div class="final-value-number" style="color:${color}">${v > 0 ? '+' : ''}${v}</div><div class="final-value-label">${VALUE_LABELS[k] ?? k}</div></div>`;
+        const display = DEVELOPER_MODE
+          ? `${v > 0 ? '+' : ''}${v}`
+          : (k === 'macht' ? getMachtStatusLabel(v) : getValueStatusLabel(v));
+        return `<div class="final-value-card"><div class="final-value-number" style="color:${color}">${display}</div><div class="final-value-label">${VALUE_LABELS[k] ?? k}</div></div>`;
       })
       .join('');
   }

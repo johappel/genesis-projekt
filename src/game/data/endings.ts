@@ -60,15 +60,15 @@ export const ENDINGS: Ending[] = [
       v.schoepfung >= 1,
     badge: '🌟',
     title: 'Der verantwortete Genesis-Pakt',
-    subtitle: 'KI im Dienst des Menschen – unter demokratischer Kontrolle',
-    text: 'Du hast KI konsequent als Werkzeug im Dienst des Menschen gestaltet. Die algorithmische Macht bleibt unter menschlicher Kontrolle. Frieden, Gerechtigkeit und Schöpfungsverantwortung wurden als Maßstäbe verankert. Neopolis wird zum Modell für verantwortungsvolle KI-Gestaltung in Europa.',
+    subtitle: 'KI im Dienst des Menschen – trotz bleibender Zielkonflikte tragfähig balanciert',
+    text: 'Du hast KI nicht einfach moralisch „richtig“ verwaltet, sondern reale Zielkonflikte ausgehalten. Versorgung blieb tragfähig, Macht blieb begrenzt, und Frieden, Gerechtigkeit, Autonomie sowie Schöpfungsverantwortung wurden gegen spürbare Gegenkosten verteidigt. Neopolis wird damit nicht zur perfekten, aber zu einer belastbaren demokratischen Referenz.',
     color: '#4caf50',
     reflexion:
-      'Der Genesis-Pakt zeigt: KI kann dem Menschen dienen – wenn die Gemeinschaft konsequent Verantwortung übernimmt, Macht begrenzt und Würde zum Maßstab macht.',
+      'Der Genesis-Pakt zeigt: Verantwortliche KI-Gestaltung heißt nicht, alle Konflikte aufzulösen. Sie heißt, Macht zu begrenzen und auch unter Druck an Würde, Gerechtigkeit und Schöpfungsverantwortung festzuhalten.',
   },
   {
     condition: (v) =>
-      v.nutzen >= 2 &&
+      v.nutzen >= 1 &&
       (v.gerechtigkeit <= -2 || v.autonomie <= -2 || v.macht >= 7),
     badge: '🏙️',
     title: 'Technokratischer Frieden',

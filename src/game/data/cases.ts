@@ -43,9 +43,9 @@ export const CASES: Case[] = [
         id: 'sophia-1-b',
         text: 'SOPHIA nur als Assistenz für Lehrkräfte – Letztentscheidung beim Menschen',
         icon: '🤝',
-        effects: { nutzen: 1, autonomie: 2, schoepfung: 1 },
+        effects: { nutzen: 1, autonomie: 2, schoepfung: 1, gerechtigkeit: -1 },
         consequence:
-          'Lehrkräfte nutzen SOPHIA als Hinweis, entscheiden aber selbst. Das Vertrauen der Schüler:innen bleibt bei den Menschen. Der Fortschritt ist langsamer, aber nachhaltiger. Schulen begrenzen zugleich den permanenten Daten- und Rechenaufwand.',
+          'Lehrkräfte nutzen SOPHIA als Hinweis, entscheiden aber selbst. Das Vertrauen der Schüler:innen bleibt bei den Menschen. Der Fortschritt ist langsamer, aber nachhaltiger. Zugleich zeigt sich schnell: Schulen mit mehr Personal können dieses Modell besser tragen als überlastete Schulen.',
         reflexion:
           'Was verloren geht, wenn Maschinen über Bildungsbiografien entscheiden – auch wenn sie es besser können?',
         iconResult: '✨',
@@ -54,9 +54,9 @@ export const CASES: Case[] = [
         id: 'sophia-1-c',
         text: 'Bildungsziele erweitern: Fehlerkultur, Kreativität, Beziehung verpflichtend',
         icon: '🎨',
-        effects: { gerechtigkeit: 1, autonomie: 1, frieden: 1, schoepfung: 1 },
+        effects: { gerechtigkeit: 1, autonomie: 1, frieden: 1, nutzen: -1 },
         consequence:
-          'SOPHIA muss neu trainiert werden. Die Noten sinken kurzfristig. Aber Schüler:innen berichten von mehr Freude am Lernen. Lehrkräfte gewinnen Bedeutung zurück. Weniger Daueroptimierung senkt auch den Infrastrukturverbrauch.',
+          'SOPHIA muss neu trainiert werden. Die Noten sinken kurzfristig. Aber Schüler:innen berichten von mehr Freude am Lernen. Lehrkräfte gewinnen Bedeutung zurück. Der Umbau kostet Zeit und verlangsamt zunächst die messbaren Lernerfolge.',
         reflexion: 'Wer entscheidet, was Bildung bedeutet – der Algorithmus oder die Gemeinschaft?',
         iconResult: '🌱',
       },
@@ -115,9 +115,9 @@ export const CASES: Case[] = [
         id: 'aegis-2-b',
         text: 'Ärztliche Letztverantwortung verpflichtend machen – AEGIS nur Empfehlung',
         icon: '👨‍⚕️',
-        effects: { autonomie: 2, nutzen: 1, macht: -1 },
+        effects: { autonomie: 2, nutzen: -1, macht: -1 },
         consequence:
-          'Die Haftungsfrage ist klar. Ärzt:innen müssen alle KI-Empfehlungen dokumentiert prüfen. Das dauert länger, aber das Vertrauen der Patient:innen steigt.',
+          'Die Haftungsfrage ist klar. Ärzt:innen müssen alle KI-Empfehlungen dokumentiert prüfen. Das dauert länger, bindet Personal und verlangsamt die Versorgung. Dafür bleibt die Verantwortung beim Menschen.',
         reflexion:
           'Was verliert Medizin, wenn sie Verantwortung an Algorithmen abgibt – auch wenn die Ergebnisse besser sind?',
         iconResult: '✅',
@@ -137,9 +137,9 @@ export const CASES: Case[] = [
         id: 'aegis-2-d',
         text: 'Patient:innen über KI-Nutzung informieren – Opt-out ermöglichen',
         icon: '📋',
-        effects: { autonomie: 1, gerechtigkeit: 1, schoepfung: 1 },
+        effects: { autonomie: 1, gerechtigkeit: 1, schoepfung: 1, nutzen: -1 },
         consequence:
-          '15% der Patient:innen lehnen AEGIS ab. Ihre Behandlung dauert länger. Aber ihre Entscheidungsfreiheit ist gewahrt. Die Diskussion über Vertrauen beginnt. Zugleich sinkt unnötiger Rechen- und Datenaufwand.',
+          '15% der Patient:innen lehnen AEGIS ab. Ihre Behandlung dauert länger. Aber ihre Entscheidungsfreiheit ist gewahrt. Die Diskussion über Verantwortung beginnt. Zugleich sinkt unnötiger Rechen- und Datenaufwand.',
         reflexion:
           'Wem gehört die eigene Gesundheitsentscheidung – dem Patienten oder dem Algorithmus?',
         iconResult: '🗣️',
@@ -209,9 +209,9 @@ export const CASES: Case[] = [
         id: 'sophia-3-d',
         text: 'Menschliche Beratung verpflichtend ergänzen – KI + Mensch',
         icon: '🤲',
-        effects: { frieden: 1, autonomie: 1, nutzen: 1 },
+        effects: { frieden: 1, autonomie: 1, schoepfung: -1 },
         consequence:
-          'Jede SOPHIA-Empfehlung wird von einer Lehrkraft begleitet. Das kostet Ressourcen, aber der emotionale Schaden wird begrenzt. Vertrauen steigt langfristig.',
+          'Jede SOPHIA-Empfehlung wird von einer Lehrkraft begleitet. Das kostet zusätzliche Zeit, Personal und Infrastruktur, begrenzt aber den emotionalen Schaden.',
         reflexion:
           'Können KI und Mensch gemeinsam für Kinder sorgen – oder braucht es klare Grenzen zwischen beiden?',
         iconResult: '🌟',
@@ -329,9 +329,9 @@ export const CASES: Case[] = [
         id: 'aegis-5-b',
         text: 'Menschenwürde-Regel: Kein Lebenswert-Scoring erlaubt',
         icon: '🕊️',
-        effects: { gerechtigkeit: 3, autonomie: 1, nutzen: -1, frieden: 1, schoepfung: 1 },
+        effects: { gerechtigkeit: 2, autonomie: 1, nutzen: -2, frieden: -1, schoepfung: 1 },
         consequence:
-          'AEGIS darf nicht nach sozialem Wert entscheiden. Die Gesamtüberlebensrate sinkt leicht. Aber die Würde aller Patient:innen bleibt gewahrt. Ärzte können wieder in die Augen ihrer Patient:innen schauen. Das System dient wieder dem Leben statt bloßer Verwertungslogik.',
+          'AEGIS darf nicht nach sozialem Wert entscheiden. Die Gesamtüberlebensrate sinkt spürbar. Zugleich entbrennt ein harter Streit darüber, ob die Stadt zu viele Menschen hätte retten können. Aber die Würde aller Patient:innen bleibt gewahrt.',
         reflexion: 'Wofür ist eine Gesellschaft bereit, eine niedrigere Überlebensrate zu akzeptieren?',
         iconResult: '✝️',
       },
@@ -412,9 +412,9 @@ export const CASES: Case[] = [
         id: 'pax-6-c',
         text: 'Internationales Moratorium für autonome Waffensysteme fordern',
         icon: '🌍',
-        effects: { frieden: 3, gerechtigkeit: 1, macht: -1, schoepfung: 1 },
+        effects: { frieden: 2, gerechtigkeit: 1, macht: -1, schoepfung: 1, nutzen: -1 },
         consequence:
-          'Neopolis wird zum Symbol für verantwortungsvolle KI-Politik. Das Moratorium wird von 23 Städten unterstützt. Die Kill-Chain wird eingefroren, bis internationale Regelungen bestehen. Lebens- und Infrastrukturzerstörung werden präventiv begrenzt.',
+          'Neopolis wird zum Symbol für verantwortungsvolle KI-Politik. Das Moratorium wird von 23 Städten unterstützt. Zugleich wirft die Opposition dem Rat sicherheitspolitische Naivität vor. Die Kill-Chain wird eingefroren, bis internationale Regelungen bestehen.',
         reflexion: 'Wie können lokale ethische Entscheidungen globale Normen setzen?',
         iconResult: '🌟',
       },
@@ -475,9 +475,9 @@ export const CASES: Case[] = [
         id: 'pax-7-b',
         text: 'Sozialtarif, Mindestwärmegarantie und faire Lastverteilung verbindlich machen',
         icon: '⚖️',
-        effects: { schoepfung: 2, gerechtigkeit: 2, frieden: 1, macht: -1, nutzen: 1 },
+        effects: { schoepfung: 1, gerechtigkeit: 2, frieden: 1, macht: 1, nutzen: -1 },
         consequence:
-          'Die CO₂-Einsparung fällt etwas geringer aus, aber das Netz wird sozial abgefedert. Energiepolitik wird erstmals als gemeinsames Gemeinwohlprojekt erlebt.',
+          'Die CO₂-Einsparung fällt geringer aus, und die Stadt muss stärkere zentrale Steuerung organisieren. Dafür wird das Netz sozial abgefedert und erstmals als Gemeinwohlprojekt verhandelt.',
         reflexion:
           'Wie viel Effizienz darf eine gerechte Ordnung kosten – und wie viel Gerechtigkeit braucht ökologische Steuerung, um legitim zu sein?',
         iconResult: '🤝',
@@ -486,9 +486,9 @@ export const CASES: Case[] = [
         id: 'pax-7-c',
         text: 'Transparenz, Quartiersräte und lokales Opt-out einführen',
         icon: '🏘️',
-        effects: { autonomie: 2, gerechtigkeit: 1, frieden: 1, schoepfung: 1, nutzen: -1 },
+        effects: { autonomie: 2, gerechtigkeit: 1, frieden: 1, schoepfung: 1, nutzen: -2 },
         consequence:
-          'Der Ausbau verlangsamt sich. Dafür verstehen die Menschen erstmals, wie das Netz arbeitet, und können Grenzen mitbestimmen. Die Emissionssenkung bleibt moderat, aber demokratisch getragen.',
+          'Der Ausbau verlangsamt sich deutlich. Dafür verstehen die Menschen erstmals, wie das Netz arbeitet, und können Grenzen mitbestimmen. Die Emissionssenkung bleibt moderat, aber demokratisch getragen.',
         reflexion:
           'Ist langsamere Transformation vertretbar, wenn sie demokratische Mitsprache und Vertrauen stärkt?',
         iconResult: '🗳️',

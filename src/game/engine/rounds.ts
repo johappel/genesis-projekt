@@ -126,9 +126,8 @@ function applySystemicConsequences(
   }
 
   if (schoepfung >= 2 && gerechtigkeit >= 1 && nutzen >= 0 && s.macht <= 6) {
-    s = applyEffect(s, { frieden: 1 });
     notes.push(
-      'Nachhaltige und fair verteilte KI-Nutzung stabilisiert den sozialen Zusammenhalt.'
+      'Nachhaltige und fair verteilte KI-Nutzung wirkt stabilisierend, löst Zielkonflikte aber nicht automatisch auf.'
     );
   }
 
