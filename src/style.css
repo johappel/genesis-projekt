@@ -1,0 +1,325 @@
+/* ============================================================
+   PROJEKT GENESIS – CSS
+   ============================================================ */
+*{margin:0;padding:0;box-sizing:border-box}
+
+:root{
+  --primary:#1a1a2e;
+  --secondary:#16213e;
+  --accent:#0f3460;
+  --highlight:#e94560;
+  --gold:#f5a623;
+  --green:#4caf50;
+  --blue:#2196f3;
+  --purple:#9c27b0;
+  --text:#e0e0e0;
+  --text-dim:#9e9e9e;
+  --card-bg:#1e2a3a;
+  --border:#2a3f5f;
+}
+
+body{
+  font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+  background:var(--primary);
+  color:var(--text);
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* ---------- SCREENS ---------- */
+.screen{display:none;min-height:100vh;padding:20px;animation:fadeIn 0.4s ease}
+.screen.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.7}}
+
+/* ---------- UTILITIES ---------- */
+.hidden{display:none!important}
+.text-center{text-align:center}
+.mb-20{margin-bottom:20px}
+.mt-20{margin-top:20px}
+.max-800{max-width:800px;margin:0 auto}
+.max-900{max-width:900px;margin:0 auto}
+
+/* ---------- BUTTONS ---------- */
+.btn{
+  padding:13px 28px;border:none;border-radius:8px;
+  font-size:1em;cursor:pointer;transition:all 0.25s ease;
+  font-weight:bold;letter-spacing:0.5px;
+}
+.btn:disabled{opacity:0.5;cursor:default}
+.btn-primary{background:linear-gradient(135deg,var(--highlight),#c0392b);color:white;box-shadow:0 4px 14px rgba(233,69,96,0.35)}
+.btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 6px 20px rgba(233,69,96,0.55)}
+.btn-secondary{background:var(--accent);color:white;border:1px solid var(--border)}
+.btn-secondary:hover:not(:disabled){background:#1a4a7a;transform:translateY(-2px)}
+.btn-gold{background:linear-gradient(135deg,var(--gold),#d4901e);color:#1a1a2e}
+.btn-gold:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 6px 18px rgba(245,166,35,0.45)}
+.btn-green{background:linear-gradient(135deg,var(--green),#388e3c);color:white}
+.btn-danger{background:linear-gradient(135deg,#e74c3c,#c0392b);color:white}
+
+/* ---------- START ---------- */
+#screen-start{
+  display:none;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;
+  background:linear-gradient(135deg,#0a0a1a 0%,#1a1a2e 50%,#0f3460 100%);
+}
+#screen-start.active{display:flex}
+.start-logo{font-size:4em;margin-bottom:20px;animation:pulse 2s infinite}
+.start-title{font-size:2.5em;font-weight:bold;color:var(--gold);margin-bottom:8px;text-shadow:0 0 20px rgba(245,166,35,0.5)}
+.start-subtitle{font-size:1.2em;color:var(--text-dim);margin-bottom:36px}
+.start-description{max-width:600px;margin:0 auto 36px;line-height:1.8;font-size:1.05em;text-align:center}
+
+/* ---------- PANELS ---------- */
+.panel{background:var(--secondary);border-radius:12px;padding:20px;border:1px solid var(--border);margin-bottom:18px}
+.panel-title{font-size:1em;font-weight:bold;color:var(--text-dim);margin-bottom:12px;text-transform:uppercase;letter-spacing:1px}
+
+/* ---------- INTRO / LINSEN ---------- */
+.intro-title,.linsen-title,.roles-title,.section-title{
+  font-size:1.8em;color:var(--gold);margin-bottom:10px;text-align:center;
+}
+.intro-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:22px}
+.intro-ki-card{background:var(--card-bg);border-radius:10px;padding:14px}
+
+.linsen-grid-tut{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-bottom:24px}
+.linse-tut-card{background:var(--secondary);border-radius:12px;padding:18px;border:1px solid var(--border)}
+.linse-tut-icon{font-size:2.2em;margin-bottom:8px}
+.linse-tut-name{font-size:1.05em;font-weight:bold;color:var(--gold);margin-bottom:6px}
+.linse-tut-leitfrage{font-style:italic;color:#7fb3e8;margin-bottom:8px;font-size:0.88em}
+.linse-tut-desc{font-size:0.82em;color:var(--text-dim);line-height:1.55}
+
+/* ---------- ROLLENAUSWAHL ---------- */
+.roles-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:24px}
+.role-select-card{
+  background:var(--secondary);border:2px solid var(--border);
+  border-radius:12px;padding:18px;cursor:pointer;transition:all 0.3s ease;
+}
+.role-select-card:hover{border-color:var(--gold);transform:translateY(-3px)}
+.role-select-card.selected{border-color:var(--gold);background:rgba(245,166,35,0.1)}
+.role-icon-lg{font-size:2.4em;margin-bottom:8px}
+.role-title{font-size:1.05em;font-weight:bold;color:var(--gold);margin-bottom:6px}
+.role-ability{font-size:0.82em;color:#7fb3e8;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+
+/* ---------- GAME HEADER ---------- */
+.game-header{
+  background:var(--secondary);border-radius:12px;padding:13px 18px;
+  margin-bottom:16px;border:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;
+}
+.game-title-sm{color:var(--gold);font-size:1.15em;font-weight:bold}
+.phase-indicator{background:var(--accent);padding:4px 14px;border-radius:20px;font-size:0.88em;color:var(--text-dim)}
+
+/* ---------- PROGRESS ---------- */
+.progress-bar{height:4px;background:var(--border);border-radius:2px;margin-bottom:18px;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--highlight),var(--gold));border-radius:2px;transition:width 0.5s ease}
+
+/* ---------- WERTE-PANEL ---------- */
+.values-panel{background:var(--secondary);border-radius:12px;padding:14px;margin-bottom:18px;border:1px solid var(--border)}
+.values-title-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.values-title{font-size:0.88em;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.values-help-btn{
+  padding:7px 11px;border-radius:8px;border:1px solid var(--border);
+  background:var(--card-bg);color:var(--text-dim);font-size:0.76em;cursor:pointer;transition:all 0.2s;
+}
+.values-help-btn:hover{color:var(--gold);border-color:var(--gold)}
+.values-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:9px}
+.value-item{
+  background:var(--card-bg);border-radius:8px;padding:9px;
+  border:1px solid var(--border);cursor:pointer;transition:all 0.2s;
+}
+.value-item:hover{border-color:var(--gold);background:rgba(245,166,35,0.07)}
+.value-label{font-size:0.78em;color:var(--text-dim);margin-bottom:4px;display:flex;justify-content:space-between}
+.value-number{font-weight:bold;font-size:0.88em}
+.value-bar{height:5px;background:#333;border-radius:3px;overflow:hidden;margin-top:4px}
+.value-bar-fill{height:100%;border-radius:3px;transition:width 0.5s ease,background 0.3s ease}
+
+.macht-bar-container{margin-top:10px}
+.macht-label{display:flex;justify-content:space-between;align-items:center;font-size:0.84em;margin-bottom:4px}
+.macht-label-left{display:flex;align-items:center;gap:6px}
+.macht-info-btn{
+  background:transparent;border:1px solid var(--border);color:var(--text-dim);
+  border-radius:999px;width:20px;height:20px;font-size:0.72em;cursor:pointer;padding:0;
+}
+.macht-info-btn:hover{border-color:var(--gold);color:var(--gold)}
+.macht-bar{height:11px;background:#333;border-radius:6px;overflow:hidden}
+.macht-bar-fill{height:100%;border-radius:6px;transition:width 0.5s ease,background 0.3s ease}
+.macht-warning{background:rgba(156,39,176,0.15);border:1px solid rgba(156,39,176,0.4);border-radius:8px;padding:9px;font-size:0.84em;margin-top:8px}
+.macht-warning.danger{background:rgba(233,69,96,0.15);border-color:rgba(233,69,96,0.5);animation:blink 1s infinite}
+
+/* ---------- GAME MAIN ---------- */
+.game-main{display:grid;grid-template-columns:1fr 300px;gap:18px}
+@media(max-width:900px){.game-main{grid-template-columns:1fr}}
+
+/* ---------- SZENARIO ---------- */
+.scenario-panel{background:var(--secondary);border-radius:12px;padding:22px;border:1px solid var(--border)}
+.scenario-tag{
+  display:inline-block;padding:3px 10px;border-radius:20px;font-size:0.78em;
+  font-weight:bold;margin-bottom:13px;text-transform:uppercase;letter-spacing:1px;
+}
+.tag-nuetzlich{background:rgba(76,175,80,0.2);color:#4caf50;border:1px solid #4caf50}
+.tag-unterstuetzend{background:rgba(33,150,243,0.2);color:#2196f3;border:1px solid #2196f3}
+.tag-manipulierend{background:rgba(255,152,0,0.2);color:#ff9800;border:1px solid #ff9800}
+.tag-bestimmend{background:rgba(233,69,96,0.2);color:var(--highlight);border:1px solid var(--highlight)}
+.tag-gefaehrdend{background:rgba(156,39,176,0.2);color:#9c27b0;border:1px solid #9c27b0}
+.scenario-title{font-size:1.5em;font-weight:bold;color:var(--gold);margin-bottom:12px}
+.scenario-ki-badge{
+  display:inline-block;background:var(--accent);padding:2px 9px;
+  border-radius:5px;font-size:0.82em;margin-bottom:13px;color:#7fb3e8;
+}
+.scenario-text{line-height:1.8;margin-bottom:18px}
+.scenario-problem{background:rgba(233,69,96,0.1);border-left:3px solid var(--highlight);padding:13px;border-radius:0 8px 8px 0;margin-bottom:18px}
+.scenario-problem-title{font-weight:bold;color:var(--highlight);margin-bottom:6px;font-size:0.88em;text-transform:uppercase}
+.central-question{
+  background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.3);
+  border-radius:8px;padding:13px;margin-bottom:22px;text-align:center;
+  font-style:italic;color:var(--gold);font-size:1em;
+}
+
+/* ---------- LINSEN (im Spiel) ---------- */
+.linsen-section{margin-bottom:22px}
+.linsen-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px}
+.linse-card{
+  background:var(--card-bg);border:2px solid var(--border);
+  border-radius:10px;padding:11px;cursor:pointer;transition:all 0.3s ease;text-align:center;
+}
+.linse-card:hover{border-color:var(--gold);transform:translateY(-2px)}
+.linse-card.selected{border-color:var(--gold);background:rgba(245,166,35,0.15)}
+.linse-icon{font-size:1.7em;margin-bottom:6px}
+.linse-name{font-weight:bold;font-size:0.82em;margin-bottom:4px}
+.linse-desc{font-size:0.72em;color:var(--text-dim)}
+.linse-effect{
+  background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.3);
+  border-radius:8px;padding:13px;margin-bottom:18px;animation:fadeIn 0.3s ease;
+}
+.linse-effect-title{color:var(--gold);font-weight:bold;margin-bottom:7px;font-size:0.88em}
+.linse-effect-text{font-size:0.88em;line-height:1.6}
+
+/* ---------- ENTSCHEIDUNGEN ---------- */
+.decision-card{
+  background:var(--card-bg);border:1px solid var(--border);
+  border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;transition:all 0.3s ease;
+}
+.decision-card:hover{border-color:var(--highlight);transform:translateX(5px);background:rgba(233,69,96,0.05)}
+.decision-text{font-weight:bold;margin-bottom:6px;font-size:0.92em}
+.decision-effects{display:flex;flex-wrap:wrap;gap:4px}
+.effect-tag{padding:2px 7px;border-radius:10px;font-size:0.72em;font-weight:bold}
+.effect-positive{background:rgba(76,175,80,0.2);color:#4caf50}
+.effect-negative{background:rgba(233,69,96,0.2);color:var(--highlight)}
+.effect-neutral{background:rgba(158,158,158,0.2);color:#9e9e9e}
+
+/* ---------- DECISION TIMER ---------- */
+.decision-timer{
+  background:rgba(233,69,96,0.08);border:1px solid rgba(233,69,96,0.3);
+  border-radius:8px;padding:11px 14px;margin-bottom:13px;font-size:0.84em;
+}
+.decision-timer.urgent{background:rgba(233,69,96,0.18);border-color:rgba(233,69,96,0.6);animation:blink 0.8s infinite}
+.timer-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;color:var(--text-dim)}
+.timer-seconds{font-weight:bold;font-size:1.1em;color:var(--highlight)}
+.timer-bar{height:5px;background:#333;border-radius:3px;overflow:hidden}
+.timer-bar-fill{height:100%;border-radius:3px;background:var(--highlight);transition:width 1s linear,background 1s ease}
+
+/* ---------- SIDEBAR ---------- */
+.sidebar{display:flex;flex-direction:column;gap:14px}
+.sidebar-panel{background:var(--secondary);border-radius:12px;padding:14px;border:1px solid var(--border)}
+.sidebar-title{font-size:0.82em;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);margin-bottom:11px}
+.role-card{background:var(--card-bg);border-radius:8px;padding:9px;margin-bottom:7px;border:1px solid var(--border)}
+.protocol-entry{background:var(--card-bg);border-radius:6px;padding:7px;margin-bottom:5px;font-size:0.78em;border-left:3px solid var(--accent)}
+
+/* ---------- KONSEQUENZ OVERLAY ---------- */
+.consequence-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.85);
+  display:flex;align-items:center;justify-content:center;z-index:1000;animation:fadeIn 0.3s ease;
+}
+.consequence-box{
+  background:var(--secondary);border:1px solid var(--border);
+  border-radius:16px;padding:32px;max-width:540px;width:90%;text-align:center;
+}
+.consequence-icon{font-size:3em;margin-bottom:13px}
+.consequence-title{font-size:1.35em;font-weight:bold;color:var(--gold);margin-bottom:13px}
+.consequence-text{line-height:1.8;margin-bottom:18px;color:var(--text-dim)}
+.value-changes{display:flex;flex-wrap:wrap;justify-content:center;gap:7px;margin-bottom:18px}
+.value-change-item{padding:4px 11px;border-radius:20px;font-size:0.88em;font-weight:bold}
+.change-positive{background:rgba(76,175,80,0.2);color:#4caf50;border:1px solid #4caf50}
+.change-negative{background:rgba(233,69,96,0.2);color:var(--highlight);border:1px solid var(--highlight)}
+.reflexion-box{
+  background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.3);
+  border-radius:8px;padding:13px;margin-bottom:18px;font-style:italic;
+  color:var(--gold);font-size:0.92em;line-height:1.6;
+}
+
+/* ---------- INFO OVERLAY ---------- */
+.info-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,0.82);
+  display:flex;align-items:center;justify-content:center;z-index:1100;padding:20px;
+}
+.info-dialog{
+  width:min(760px,100%);max-height:85vh;overflow-y:auto;
+  background:var(--secondary);border:1px solid var(--border);
+  border-radius:16px;padding:26px;box-shadow:0 20px 60px rgba(0,0,0,0.45);
+}
+.info-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:16px}
+.info-title{color:var(--gold);font-size:1.25em;font-weight:bold;margin-bottom:5px}
+.info-subtitle{color:var(--text-dim);line-height:1.6;font-size:0.92em}
+.info-close-btn{
+  background:transparent;border:1px solid var(--border);color:var(--text-dim);
+  border-radius:999px;width:32px;height:32px;cursor:pointer;font-size:1.05em;flex:0 0 auto;
+}
+.info-close-btn:hover{color:var(--gold);border-color:var(--gold)}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:11px}
+.info-card{background:var(--card-bg);border:1px solid var(--border);border-radius:12px;padding:13px}
+.info-card-title{color:var(--gold);font-size:0.8em;text-transform:uppercase;letter-spacing:1px;margin-bottom:7px}
+.info-card-body{line-height:1.62;color:var(--text);font-size:0.92em}
+.info-overview-item{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:11px}
+.info-overview-name{font-weight:bold;color:var(--gold);margin-bottom:5px}
+
+/* ---------- FINALE ---------- */
+.finale-header{
+  text-align:center;margin-bottom:36px;padding:36px 20px;
+  background:linear-gradient(135deg,#0a0a1a,#1a1a2e);border-radius:16px;border:1px solid var(--border);
+}
+.finale-title{font-size:1.9em;color:var(--gold);margin-bottom:8px}
+.pakt-article{margin-bottom:18px}
+.pakt-article-title{color:var(--gold);font-weight:bold;margin-bottom:8px}
+.pakt-input{
+  width:100%;background:var(--card-bg);border:1px solid var(--border);
+  border-radius:8px;padding:11px;color:var(--text);font-family:inherit;
+  resize:vertical;min-height:78px;font-size:0.92em;
+}
+.pakt-input:focus{outline:none;border-color:var(--gold)}
+
+/* ---------- ENDSCREEN ---------- */
+.end-badge{font-size:5em;margin-bottom:18px}
+.end-title{font-size:1.9em;color:var(--gold);margin-bottom:13px}
+.end-subtitle{font-size:1.15em;color:var(--text-dim);margin-bottom:26px}
+.final-values{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:13px;margin-bottom:26px}
+.final-value-card{background:var(--secondary);border-radius:10px;padding:13px;border:1px solid var(--border)}
+.final-value-number{font-size:1.9em;font-weight:bold;margin-bottom:4px}
+.final-value-label{font-size:0.78em;color:var(--text-dim)}
+.pakt-display{background:var(--secondary);border-radius:12px;padding:22px;margin-bottom:26px;border:1px solid var(--gold)}
+.pakt-display-title{color:var(--gold);font-size:1.25em;font-weight:bold;margin-bottom:18px;text-align:center}
+.pakt-display-article{margin-bottom:13px;padding-bottom:13px;border-bottom:1px solid var(--border)}
+.pakt-display-article:last-child{border-bottom:none}
+.pakt-article-label{color:var(--highlight);font-weight:bold;font-size:0.82em;margin-bottom:4px;text-transform:uppercase}
+
+/* ---------- PAX DOMINUS SCREEN ---------- */
+#screen-pax-dominus.active{display:block}
+
+/* ---------- SCROLLBAR ---------- */
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-track{background:var(--primary)}
+::-webkit-scrollbar-thumb{background:var(--accent);border-radius:4px}
+
+/* ---------- RESPONSIVE ---------- */
+@media(max-width:600px){
+  .start-title{font-size:1.8em}
+  .scenario-title{font-size:1.25em}
+  .values-title-row{flex-direction:column;align-items:stretch}
+  .values-help-btn{width:100%}
+  .info-dialog{padding:18px}
+}
+
+/* focus-visible für Barrierefreiheit */
+.btn:focus-visible,.role-select-card:focus-visible,.decision-card:focus-visible,
+.linse-card:focus-visible,.value-item:focus-visible,.info-close-btn:focus-visible,
+.macht-info-btn:focus-visible,.values-help-btn:focus-visible{
+  outline:2px solid var(--gold);outline-offset:2px;
+}

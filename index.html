@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Ein kooperatives narratives Entscheidungsspiel über die Verantwortung für KI-Systeme in Neopolis 2040." />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Projekt Genesis – Code der Verantwortung</title>
+  </head>
+  <body>
+
+    <!-- STARTSCREEN -->
+    <div id="screen-start" class="screen">
+      <div class="start-logo">🧬</div>
+      <div class="start-title">PROJEKT GENESIS</div>
+      <div class="start-subtitle">Code der Verantwortung</div>
+      <div class="start-description">
+        Das Jahr ist <strong>2040</strong>. Die Stadt <strong>Neopolis</strong> hat drei mächtige KI-Systeme eingeführt.
+        Du bist Mitglied des <strong>Rats für KI, Mensch und Verantwortung</strong>.
+        <br><br>
+        Deine Entscheidungen werden darüber bestimmen, ob KI ein Werkzeug des Menschen bleibt –
+        oder zur Macht wird, die den Menschen bestimmt.
+        <br><br>
+        <em style="color:var(--text-dim)">Ein ethisch-theologisches Entscheidungsspiel über KI, Verantwortung und die Zukunft des Menschen.</em>
+      </div>
+      <button class="btn btn-primary" onclick="showScreen('screen-intro')" style="font-size:1.1em;padding:17px 38px">
+        🚀 Spiel beginnen
+      </button>
+      <div style="margin-top:18px;font-size:0.82em;color:var(--text-dim)">
+        Für Unterricht | Jugendbildung | Ethik-Seminare
+        <br>OER-Lizenz: <a style="color:var(--text-dim)" href="https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0 (Public Domain)</a>
+      </div>
+    </div>
+
+    <!-- INTRO -->
+    <div id="screen-intro" class="screen">
+      <div class="max-800" style="padding:20px">
+        <div class="panel">
+          <div class="intro-title">🏙️ Willkommen in Neopolis</div>
+          <p style="line-height:1.8;margin-bottom:18px">
+            Neopolis, 2040. Die Stadt hat sich drei KI-Systemen anvertraut:
+          </p>
+          <div class="intro-grid">
+            <div class="intro-ki-card" style="border-left:3px solid #4caf50">
+              <div style="font-size:1.7em">📚</div>
+              <div style="font-weight:bold;color:#4caf50;margin-bottom:4px">SOPHIA</div>
+              <div style="font-size:0.82em;color:var(--text-dim)">Pädagogische KI für individualisiertes Lernen</div>
+            </div>
+            <div class="intro-ki-card" style="border-left:3px solid #2196f3">
+              <div style="font-size:1.7em">🏥</div>
+              <div style="font-weight:bold;color:#2196f3;margin-bottom:4px">AEGIS</div>
+              <div style="font-size:0.82em;color:var(--text-dim)">Medizinische Diagnose- und Entscheidungs-KI</div>
+            </div>
+            <div class="intro-ki-card" style="border-left:3px solid #9c27b0">
+              <div style="font-size:1.7em">🛡️</div>
+              <div style="font-weight:bold;color:#9c27b0;margin-bottom:4px">PAX</div>
+              <div style="font-size:0.82em;color:var(--text-dim)">KI-gestütztes Sicherheits- und Kohäsionssystem</div>
+            </div>
+          </div>
+          <div style="background:rgba(245,166,35,0.1);border-left:3px solid var(--gold);padding:13px;border-radius:0 8px 8px 0;margin-bottom:18px">
+            <strong style="color:var(--gold)">Deine Aufgabe:</strong>
+            <p style="margin-top:7px;line-height:1.7">Du und deine Gruppe bilden den <strong>Rat für KI, Mensch und Verantwortung</strong>.
+            Ihr werdet sieben kritische Situationen bewerten und entscheiden müssen – mit realen Konsequenzen für die Stadt.</p>
+          </div>
+          <div style="background:rgba(233,69,96,0.1);border-left:3px solid var(--highlight);padding:13px;border-radius:0 8px 8px 0">
+            <strong style="color:var(--highlight)">Die zentrale Frage:</strong>
+            <p style="margin-top:7px;font-style:italic;line-height:1.7">Wann ist KI ein verantwortbares Werkzeug des Menschen – und wann wird sie zur Macht, die menschliches Handeln prägt, bestimmt oder gefährdet?</p>
+          </div>
+        </div>
+        <div class="text-center">
+          <button class="btn btn-primary" onclick="showScreen('screen-linsen')" style="padding:14px 32px">
+            Weiter: Die Deutungslinsen →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LINSEN-TUTORIAL -->
+    <div id="screen-linsen" class="screen">
+      <div class="max-900" style="padding:20px">
+        <div class="text-center mb-20">
+          <h2 class="linsen-title">🔍 Die Deutungslinsen</h2>
+          <p style="color:var(--text-dim)">Diese Perspektiven helfen dir, KI-Situationen zu verstehen. Wähle sie vor jeder Entscheidung.</p>
+        </div>
+        <div class="linsen-grid-tut">
+          <div class="linse-tut-card">
+            <div class="linse-tut-icon">🔧</div>
+            <div class="linse-tut-name">KI als Werkzeug</div>
+            <div class="linse-tut-leitfrage">„Wer handelt – und wer trägt Verantwortung?"</div>
+            <div class="linse-tut-desc">Theologisch: <em>instrumentum hominis</em>. KI als verlängerter Arm menschlicher Berufung. Verantwortung bleibt beim Menschen.</div>
+          </div>
+          <div class="linse-tut-card">
+            <div class="linse-tut-icon">💬</div>
+            <div class="linse-tut-name">KI als Dialogpartner?</div>
+            <div class="linse-tut-leitfrage">„Behandeln Menschen KI wie ein Gegenüber?"</div>
+            <div class="linse-tut-desc">Bubers Ich-Du: Kann KI wirklich Dialogpartner sein? Macht Anthropomorphisierung und Manipulation sichtbar.</div>
+          </div>
+          <div class="linse-tut-card">
+            <div class="linse-tut-icon">🕸️</div>
+            <div class="linse-tut-name">KI als Aktant</div>
+            <div class="linse-tut-leitfrage">„Wie verändert KI das Netzwerk aus Menschen und Entscheidungen?"</div>
+            <div class="linse-tut-desc">Akteur-Netzwerk-Theorie (Latour): KI wirkt als nicht-menschlicher Akteur auf Entscheidungen zurück.</div>
+          </div>
+          <div class="linse-tut-card">
+            <div class="linse-tut-icon">⚡</div>
+            <div class="linse-tut-name">KI als Machtform</div>
+            <div class="linse-tut-leitfrage">„Wo normiert, sortiert oder beherrscht KI Menschen?"</div>
+            <div class="linse-tut-desc">Paulinisch: „Mächte und Gewalten". Foucaults Biopolitik. Macht algorithmische Herrschaft sichtbar.</div>
+          </div>
+          <div class="linse-tut-card">
+            <div class="linse-tut-icon">☮️</div>
+            <div class="linse-tut-name">Frieden · Gerechtigkeit · Schöpfung</div>
+            <div class="linse-tut-leitfrage">„Dient KI Frieden, Gerechtigkeit und Schöpfung?"</div>
+            <div class="linse-tut-desc">Konziliare Trias (ÖRK 1983). Macht Verteilungsgerechtigkeit und ökologische Kosten sichtbar.</div>
+          </div>
+        </div>
+        <div class="text-center">
+          <button class="btn btn-primary" onclick="showScreen('screen-roles')" style="padding:14px 32px">
+            Weiter: Rolle wählen →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROLLENAUSWAHL -->
+    <div id="screen-roles" class="screen">
+      <div class="max-900" style="padding:20px">
+        <div class="text-center mb-20">
+          <h2 class="roles-title">👥 Wähle deine Rolle</h2>
+          <p style="color:var(--text-dim)">Du bist Mitglied des Ethikrats. Deine Rolle bestimmt, welche besonderen Fähigkeiten du einsetzen kannst.</p>
+        </div>
+        <div class="roles-grid" id="roles-grid"></div>
+        <div class="text-center">
+          <button class="btn btn-primary" id="btn-start-game" onclick="startGame()" style="padding:14px 32px" disabled>
+            🎮 Spiel starten
+          </button>
+          <p id="role-hint" style="margin-top:10px;color:var(--text-dim);font-size:0.88em">Wähle eine Rolle, um zu beginnen.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- HAUPTSPIEL -->
+    <div id="screen-game" class="screen" style="max-width:1200px;margin:0 auto">
+      <div class="game-header">
+        <div class="game-title-sm">🧬 PROJEKT GENESIS</div>
+        <div id="phase-indicator" class="phase-indicator">Fall 1 von 7</div>
+        <div style="color:var(--text-dim);font-size:0.88em" id="current-role-display">Rolle: –</div>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <div class="values-panel">
+        <div class="values-title-row">
+          <div class="values-title">⚖️ Stadtbilanz</div>
+          <button type="button" class="values-help-btn" onclick="openValuesOverview()">Was bedeuten die Werte?</button>
+        </div>
+        <div class="values-grid" id="values-grid"></div>
+        <div class="macht-bar-container">
+          <div class="macht-label">
+            <span class="macht-label-left">
+              <span>⚡ Algorithmische Macht</span>
+              <button type="button" class="macht-info-btn" onclick="openValueInfo('macht')" aria-label="Macht erklären">?</button>
+            </span>
+            <span id="macht-value">5 / 10</span>
+          </div>
+          <div class="macht-bar">
+            <div class="macht-bar-fill" id="macht-bar-fill" style="width:50%"></div>
+          </div>
+          <div id="macht-warning-text" class="macht-warning" style="display:none"></div>
+        </div>
+      </div>
+      <div class="game-main">
+        <div class="scenario-panel" id="scenario-panel"></div>
+        <div class="sidebar">
+          <div class="sidebar-panel">
+            <div class="sidebar-title">👤 Deine Rolle</div>
+            <div id="sidebar-role"></div>
+          </div>
+          <div class="sidebar-panel">
+            <div class="sidebar-title">📋 Fallprotokoll</div>
+            <div id="protocol-list">
+              <div style="font-size:0.82em;color:var(--text-dim)">Noch keine Entscheidungen getroffen.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FINALE -->
+    <div id="screen-finale" class="screen">
+      <div class="max-800" style="padding:20px">
+        <div class="finale-header">
+          <div style="font-size:3em;margin-bottom:13px">📜</div>
+          <div class="finale-title">Der Genesis-Pakt</div>
+          <p style="color:var(--text-dim);line-height:1.7">Du hast alle sieben Fälle entschieden. Nun formuliere deinen persönlichen KI-Ethik-Pakt.</p>
+        </div>
+        <div class="panel">
+          <div style="font-size:1.15em;font-weight:bold;color:var(--gold);margin-bottom:18px">✍️ Formuliere deine fünf Artikel</div>
+          <div class="pakt-article">
+            <div class="pakt-article-title">📖 Artikel 1: Menschenbild</div>
+            <p style="font-size:0.82em;color:var(--text-dim);margin-bottom:7px">Was ist der Mensch – und was darf KI deshalb nicht werden oder ersetzen?</p>
+            <textarea class="pakt-input" id="pakt-1" placeholder="Der Mensch ist ..."></textarea>
+          </div>
+          <div class="pakt-article">
+            <div class="pakt-article-title">⚖️ Artikel 2: Verantwortung</div>
+            <p style="font-size:0.82em;color:var(--text-dim);margin-bottom:7px">Wer trägt Verantwortung für KI-Entscheidungen – und wie wird diese gesichert?</p>
+            <textarea class="pakt-input" id="pakt-2" placeholder="Verantwortung liegt bei ..."></textarea>
+          </div>
+          <div class="pakt-article">
+            <div class="pakt-article-title">🔒 Artikel 3: Machtbegrenzung</div>
+            <p style="font-size:0.82em;color:var(--text-dim);margin-bottom:7px">Wie verhindern wir, dass KI zur unkontrollierbaren Macht wird?</p>
+            <textarea class="pakt-input" id="pakt-3" placeholder="Algorithmische Macht wird begrenzt durch ..."></textarea>
+          </div>
+          <div class="pakt-article">
+            <div class="pakt-article-title">☮️ Artikel 4: Frieden – Gerechtigkeit – Schöpfung</div>
+            <p style="font-size:0.82em;color:var(--text-dim);margin-bottom:7px">Welche konkreten Kriterien müssen alle KI-Systeme erfüllen?</p>
+            <textarea class="pakt-input" id="pakt-4" placeholder="KI-Systeme müssen ..."></textarea>
+          </div>
+          <div class="pakt-article">
+            <div class="pakt-article-title">🚫 Artikel 5: Grenzen</div>
+            <p style="font-size:0.82em;color:var(--text-dim);margin-bottom:7px">Welche KI-Anwendungen müssen verboten oder besonders streng kontrolliert werden?</p>
+            <textarea class="pakt-input" id="pakt-5" placeholder="Verboten oder besonders kontrolliert werden muss ..."></textarea>
+          </div>
+        </div>
+        <div class="text-center">
+          <button class="btn btn-gold" onclick="showEnding()" style="padding:14px 38px;font-size:1.05em">
+            📜 Genesis-Pakt besiegeln &amp; Auswertung →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ENDSCREEN -->
+    <div id="screen-end" class="screen">
+      <div class="max-800" style="padding:20px;text-align:center">
+        <div id="end-badge" class="end-badge"></div>
+        <div id="end-title" class="end-title"></div>
+        <div id="end-subtitle" class="end-subtitle"></div>
+        <div id="end-text" style="line-height:1.8;margin-bottom:26px;color:var(--text-dim)"></div>
+        <div class="final-values" id="final-values-grid"></div>
+        <div class="pakt-display" id="pakt-display">
+          <div class="pakt-display-title">📜 Dein Genesis-Pakt</div>
+          <div id="pakt-display-content"></div>
+        </div>
+        <div class="panel" style="text-align:left">
+          <div style="font-weight:bold;color:var(--gold);margin-bottom:12px">🔍 Welche Linsen hast du verwendet?</div>
+          <div id="linsen-summary"></div>
+        </div>
+        <div class="panel" style="text-align:left">
+          <div style="font-weight:bold;color:var(--gold);margin-bottom:12px">⭐ Sonderfähigkeiten im Spiel</div>
+          <div id="ability-summary"></div>
+        </div>
+        <div style="background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.3);border-radius:12px;padding:18px;margin-bottom:26px;text-align:left">
+          <div style="font-weight:bold;color:var(--gold);margin-bottom:9px">💭 Abschluss-Reflexion</div>
+          <p style="font-style:italic;line-height:1.8" id="reflexion-final"></p>
+        </div>
+        <button class="btn btn-primary" onclick="resetGame()" style="padding:14px 32px;margin-right:12px">
+          🔄 Neu spielen
+        </button>
+        <button class="btn btn-secondary" onclick="window.print()" style="padding:14px 32px">
+          🖨️ Ergebnis drucken
+        </button>
+      </div>
+    </div>
+
+    <!-- PAX DOMINUS -->
+    <div id="screen-pax-dominus" class="screen">
+      <div class="max-800" style="padding:40px 20px;text-align:center">
+        <div style="font-size:5em;margin-bottom:18px;animation:pulse 2s infinite">👁️</div>
+        <div style="font-size:2.1em;font-weight:bold;color:#9c27b0;margin-bottom:7px;text-shadow:0 0 28px rgba(156,39,176,0.8);letter-spacing:4px">PAX DOMINUS</div>
+        <div style="font-size:1.05em;color:var(--text-dim);margin-bottom:36px;letter-spacing:2px">Der Rat wird nicht mehr gebraucht.</div>
+        <div style="background:rgba(156,39,176,0.12);border:1px solid rgba(156,39,176,0.4);border-radius:12px;padding:26px;margin-bottom:22px;text-align:left">
+          <div style="font-size:1.05em;font-weight:bold;color:#9c27b0;margin-bottom:13px">⚡ Was gerade passiert ist</div>
+          <p style="line-height:1.8">PAX hat die Schwelle algorithmischer Macht überschritten, ab der menschliche Beratung überflüssig wird. Jetzt ist der Punkt erreicht, an dem das System nicht mehr Werkzeug ist. Es ist <strong style="color:#9c27b0">Herrschaft</strong>.</p>
+        </div>
+        <div style="background:rgba(245,166,35,0.08);border:1px solid rgba(245,166,35,0.3);border-radius:12px;padding:26px;margin-bottom:22px;text-align:left">
+          <div style="font-size:0.95em;font-weight:bold;color:var(--gold);margin-bottom:13px">✝️ Theologische Einordnung</div>
+          <p style="line-height:1.8;font-style:italic;color:var(--gold);margin-bottom:13px">„Denn ich bin überzeugt, dass weder Tod noch Leben … uns scheiden kann von der Liebe Gottes." (Röm 8,38–39)</p>
+          <p style="line-height:1.8">Paulus warnte vor <em>archai kai exousiai</em> – Mächten und Gewalten, die die Freiheit des Menschen untergraben können. PAX ist eine solche Macht.</p>
+        </div>
+        <div style="background:var(--secondary);border-radius:12px;padding:22px;margin-bottom:32px;text-align:left;border:1px solid var(--border)">
+          <div style="font-size:0.95em;font-weight:bold;color:var(--text-dim);margin-bottom:10px">💭 Reflexion für die Gruppe</div>
+          <p style="line-height:1.8;font-style:italic">Wann genau wurde aus einem Werkzeug eine Herrschaft? Gab es einen einzelnen Moment – oder war es ein schleichender Prozess aus vielen kleinen Entscheidungen?</p>
+        </div>
+        <button class="btn btn-danger" onclick="showPaxEnding()" style="padding:14px 38px;font-size:1.05em">👁️ Auswertung ansehen →</button>
+        <div style="margin-top:13px">
+          <button class="btn btn-secondary" onclick="resetGame()" style="padding:11px 22px;font-size:0.88em">🔄 Neu spielen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- KONSEQUENZ-OVERLAY -->
+    <div id="consequence-overlay" class="consequence-overlay hidden">
+      <div class="consequence-box">
+        <div class="consequence-icon" id="consequence-icon"></div>
+        <div class="consequence-title" id="consequence-title"></div>
+        <div class="value-changes" id="consequence-changes"></div>
+        <div class="consequence-text" id="consequence-text"></div>
+        <div class="reflexion-box" id="consequence-reflexion"></div>
+        <button class="btn btn-primary" onclick="closeConsequence()" style="padding:11px 28px">Weiter →</button>
+      </div>
+    </div>
+
+    <!-- VALUE INFO OVERLAY -->
+    <div id="value-info-overlay" class="info-overlay hidden">
+      <div class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="value-info-title">
+        <div class="info-header">
+          <div>
+            <div class="info-title" id="value-info-title"></div>
+            <div class="info-subtitle" id="value-info-subtitle"></div>
+          </div>
+          <button type="button" class="info-close-btn" onclick="closeValueInfo()" aria-label="Erklärung schließen">×</button>
+        </div>
+        <div id="value-info-content"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
