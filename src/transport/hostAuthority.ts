@@ -1,4 +1,5 @@
 import { TransportEventFactory } from './eventFactory.js';
+import { getNextPendingRole, haveAllActiveRolesVoted } from '../game/engine/voting.js';
 import type { EphemeralTransportSession } from './session.js';
 import type { RoleClaimedEvent, RoundClosedEvent, StateSnapshot, TransportMessageBus, VoteCastEvent } from './types.js';
 
@@ -32,7 +33,7 @@ export class HostAuthority {
 
   private readonly acceptedRoleOwners: Record<string, string> = {};
 
-  private readonly acceptedVotesByRound: Record<string, Record<string, VoteCastEvent>> = {};
+  private readonly acceptedVotesByPhase: Record<string, Record<string, VoteCastEvent>> = {};
 
   private readonly closedRounds = new Set<string>();
 
@@ -103,8 +104,36 @@ export class HostAuthority {
 
   private getMergedSnapshot(): StateSnapshot {
     const snapshot = this.getAuthoritativeSnapshot();
+    const currentRoundId = `round-${snapshot.state.currentCase}`;
+    const phaseKey = getVotePhaseKey(currentRoundId, Boolean(snapshot.state.tieBreakOptions));
+    const authoritativeRoundVotes = Object.values(this.acceptedVotesByPhase[phaseKey] ?? {}).reduce<Record<string, string>>(
+      (votes, voteEvent) => {
+        votes[voteEvent.roleId] = voteEvent.optionId;
+        return votes;
+      },
+      {}
+    );
+
+    let mergedState = {
+      ...snapshot.state,
+      roundVotes: {
+        ...snapshot.state.roundVotes,
+        ...authoritativeRoundVotes,
+      },
+    };
+
+    if (Object.keys(authoritativeRoundVotes).length > 0 && !haveAllActiveRolesVoted(mergedState)) {
+      const { role, index } = getNextPendingRole(mergedState);
+      mergedState = {
+        ...mergedState,
+        selectedRole: role,
+        currentRoleIndex: index,
+      };
+    }
+
     return {
       ...snapshot,
+      state: mergedState,
       roleOwners: {
         ...snapshot.roleOwners,
         ...this.acceptedRoleOwners,
@@ -230,7 +259,8 @@ export class HostAuthority {
       };
     }
 
-    const roundVotes = this.acceptedVotesByRound[event.roundId] ?? {};
+    const phaseKey = getVotePhaseKey(event.roundId, event.isTieBreak);
+    const roundVotes = this.acceptedVotesByPhase[phaseKey] ?? {};
     if (roundVotes[event.roleId]) {
       return {
         voteStatus: 'rejected',
@@ -238,7 +268,7 @@ export class HostAuthority {
       };
     }
 
-    this.acceptedVotesByRound[event.roundId] = {
+    this.acceptedVotesByPhase[phaseKey] = {
       ...roundVotes,
       [event.roleId]: event,
     };
@@ -267,7 +297,9 @@ export class HostAuthority {
     }
 
     const claimedRoles = Object.keys(this.getMergedSnapshot().roleOwners);
-    const acceptedVotes = Object.values(this.acceptedVotesByRound[event.roundId] ?? {});
+    const acceptedVotes = Object.values(
+      this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, this.isTieBreakPhaseActive())] ?? {}
+    );
     if (!claimedRoles.length || acceptedVotes.length !== claimedRoles.length) {
       return {
         roundCloseStatus: 'rejected',
@@ -292,10 +324,15 @@ export class HostAuthority {
     }
 
     this.closedRounds.add(event.roundId);
-    delete this.acceptedVotesByRound[event.roundId];
+    delete this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, false)];
+    delete this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, true)];
     return {
       roundCloseStatus: 'accepted',
     };
+  }
+
+  private isTieBreakPhaseActive(): boolean {
+    return Boolean(this.getAuthoritativeSnapshot().state.tieBreakOptions);
   }
 
   private matchesAcceptedVoteSummary(
@@ -347,4 +384,8 @@ function compareVoteSummaryEntry(
   const leftKey = `${left.roleId}:${left.playerId}:${left.optionId}`;
   const rightKey = `${right.roleId}:${right.playerId}:${right.optionId}`;
   return leftKey.localeCompare(rightKey);
+}
+
+function getVotePhaseKey(roundId: string, isTieBreak: boolean): string {
+  return `${roundId}:${isTieBreak ? 'tie-break' : 'base'}`;
 }

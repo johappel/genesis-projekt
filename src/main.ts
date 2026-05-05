@@ -18,6 +18,15 @@ import {
 } from './game/engine/voting.js';
 import { closeRound, getSystemicRiskWarning, getEmergencyEndingBadge, getAppliedRoundEffect } from './game/engine/rounds.js';
 import { activateAbility, isAbilityAvailable } from './game/rules/abilities.js';
+import {
+  createRelayJoinUrl,
+  isAcceptedRoundClose,
+  isAcceptedRoleClaim,
+  isAcceptedVote,
+  readMultiplayerUrlConfig,
+  RelayMultiplayerRuntime,
+} from './transport/runtime.js';
+import type { TransportEvent } from './transport/types.js';
 
 // ============================================================
 // ZUSTAND
@@ -26,7 +35,26 @@ let state: GameState = createGame();
 let pendingDecision: DecisionOption | null = null;
 let pendingSystemicNotes: string[] = [];
 let pendingOverlayAction: 'none' | 'render-case' | 'apply-round' | 'advance-after-round' = 'none';
+const MULTIPLAYER_CONFIG = readMultiplayerUrlConfig(window.location.search);
 const DEVELOPER_MODE = new URLSearchParams(window.location.search).has('dev');
+const MULTIPLAYER_RULES_VERSION = 'v1';
+
+let multiplayer: RelayMultiplayerRuntime | null = null;
+let multiplayerStatusMessage = MULTIPLAYER_CONFIG
+  ? MULTIPLAYER_CONFIG.mode === 'host'
+    ? 'Relay-Raum wird vorbereitet.'
+    : 'Verbinde mit bestehendem Relay-Raum.'
+  : '';
+const MULTIPLAYER_RECOVERY_TIMEOUT_MS = 2500;
+
+type PendingMultiplayerRequestKind = 'role-claim' | 'vote' | 'round-close';
+
+let pendingMultiplayerRequest:
+  | {
+      kind: PendingMultiplayerRequestKind;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  | null = null;
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let timerRemaining = DECISION_TIMER_SECONDS;
@@ -91,6 +119,360 @@ function getMachtStatusLabel(value: number): string {
   if (value <= 6) return 'spürbar';
   if (value <= 8) return 'hoch';
   return 'kritisch';
+}
+
+function isMultiplayerMode(): boolean {
+  return Boolean(multiplayer);
+}
+
+function getCurrentRoundId(): string {
+  return `round-${state.currentCase}`;
+}
+
+function isCurrentRoleOwnedLocally(): boolean {
+  return Boolean(state.selectedRole && multiplayer?.ownsRole(state.selectedRole.id));
+}
+
+function setMultiplayerStatus(message: string): void {
+  multiplayerStatusMessage = message;
+  updateMultiplayerStatusUI();
+}
+
+function clearPendingMultiplayerRequest(): void {
+  if (!pendingMultiplayerRequest) {
+    return;
+  }
+
+  clearTimeout(pendingMultiplayerRequest.timer);
+  pendingMultiplayerRequest = null;
+}
+
+function isAwaitingVoteConfirmation(): boolean {
+  return pendingMultiplayerRequest?.kind === 'vote';
+}
+
+function startPendingMultiplayerRequest(kind: PendingMultiplayerRequestKind, waitMessage: string): void {
+  clearPendingMultiplayerRequest();
+  pendingMultiplayerRequest = {
+    kind,
+    timer: setTimeout(() => {
+      pendingMultiplayerRequest = null;
+      setMultiplayerStatus(`${waitMessage} Keine Bestätigung empfangen. Raum wird neu synchronisiert.`);
+      void multiplayer?.requestStateSync();
+    }, MULTIPLAYER_RECOVERY_TIMEOUT_MS),
+  };
+}
+
+function runMultiplayerRequest(params: {
+  kind: PendingMultiplayerRequestKind;
+  waitMessage: string;
+  request: () => Promise<void>;
+  errorMessage: string;
+}): void {
+  startPendingMultiplayerRequest(params.kind, params.waitMessage);
+  void params.request().catch((error: unknown) => {
+    clearPendingMultiplayerRequest();
+    const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
+    setMultiplayerStatus(`${params.errorMessage} ${detail}. Raum wird neu synchronisiert.`);
+    void multiplayer?.requestStateSync();
+  });
+}
+
+function updateMultiplayerStatusUI(): void {
+  const startStatus = document.getElementById('multiplayer-status');
+  const rolesStatus = document.getElementById('roles-multiplayer-status');
+  const roomBox = document.getElementById('multiplayer-room-box');
+  const roomCode = document.getElementById('multiplayer-room-code') as HTMLInputElement | null;
+  const inviteLink = document.getElementById('multiplayer-invite-link') as HTMLInputElement | null;
+
+  if (startStatus) {
+    startStatus.textContent = multiplayerStatusMessage || 'Kein Relay-Mehrspieler aktiv.';
+  }
+  if (rolesStatus) {
+    rolesStatus.textContent = multiplayerStatusMessage || 'Kein Relay-Mehrspieler aktiv.';
+  }
+
+  if (!roomBox || !roomCode || !inviteLink) {
+    return;
+  }
+
+  if (!MULTIPLAYER_CONFIG) {
+    roomBox.classList.add('hidden');
+    return;
+  }
+
+  roomBox.classList.remove('hidden');
+  roomCode.value = MULTIPLAYER_CONFIG.gameId;
+  inviteLink.value = createRelayJoinUrl(window.location.href, MULTIPLAYER_CONFIG);
+}
+
+function updateRoleFlowAfterTransport(): void {
+  updateRoleSelectionUI();
+  updateSidebar();
+
+  const activeScreen = document.querySelector('.screen.active')?.id;
+  if (activeScreen === 'screen-game') {
+    renderCase();
+  }
+}
+
+function addActiveRoleById(roleId: string): void {
+  if (state.activeRoles.some((role) => role.id === roleId)) {
+    return;
+  }
+
+  const role = ROLES.find((entry) => entry.id === roleId);
+  if (!role) {
+    return;
+  }
+
+  state = {
+    ...state,
+    activeRoles: [...state.activeRoles, role],
+  };
+}
+
+function syncRoleSelectionFromOwners(): void {
+  if (!multiplayer) {
+    return;
+  }
+
+  for (const roleId of Object.keys(multiplayer.getRoleOwners())) {
+    addActiveRoleById(roleId);
+  }
+}
+
+function buildRoundVoteSummary(): Array<{ roleId: string; optionId: string; playerId: string }> {
+  const roleOwners = multiplayer?.getRoleOwners() ?? {};
+
+  return state.activeRoles
+    .map((role) => {
+      const optionId = state.roundVotes[role.id];
+      const playerId = roleOwners[role.id];
+      if (!optionId || !playerId) {
+        return null;
+      }
+
+      return {
+        roleId: role.id,
+        optionId,
+        playerId,
+      };
+    })
+    .filter((entry): entry is { roleId: string; optionId: string; playerId: string } => Boolean(entry));
+}
+
+function getResolvedVoteCount(optionId: string): number {
+  return Object.values(state.roundVotes).filter((currentOptionId) => currentOptionId === optionId).length;
+}
+
+function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cast' }>): void {
+  if (state.roundVotes[event.roleId]) {
+    return;
+  }
+
+  const caseData = CASES[state.currentCase];
+  if (!caseData) {
+    return;
+  }
+
+  const votingRole = state.activeRoles.find((role) => role.id === event.roleId) ?? null;
+  if (!votingRole) {
+    return;
+  }
+
+  const availableDecisions = getAvailableDecisions(caseData);
+  const optionIds = availableDecisions.map((decision) => decision.id);
+  const voteState = {
+    ...state,
+    selectedRole: votingRole,
+  };
+  const voteResult = castVote(voteState, event.caseId, event.optionId, optionIds);
+  if (!voteResult.ok) {
+    return;
+  }
+
+  const votedRoleName = votingRole.name;
+  state = voteResult.state;
+  clearTimer();
+
+  if (!haveAllActiveRolesVoted(state)) {
+    state = advanceToNextRole(state);
+
+    if (isMultiplayerMode()) {
+      if (isCurrentRoleOwnedLocally()) {
+        showCurrentTurnPrompt('Du bist jetzt online am Zug. Gib deine Stimme in diesem Browser ab.');
+      } else {
+        setMultiplayerStatus(`Warte auf ${state.selectedRole?.name ?? 'die nächste Rolle'} im Relay-Raum.`);
+        renderCase();
+      }
+      return;
+    }
+
+    showHandoverNotice(votedRoleName, state.selectedRole?.name ?? 'naechste Rolle');
+    return;
+  }
+
+  const roundDecision = determineRoundDecision(state, optionIds);
+  if (!roundDecision) {
+    return;
+  }
+
+  if (roundDecision.status === 'tie-break') {
+    state = beginTieBreak(state, roundDecision.optionIds);
+    showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
+    return;
+  }
+
+  if (multiplayer?.isHost) {
+    const runtime = multiplayer;
+    if (!runtime) {
+      return;
+    }
+
+    runMultiplayerRequest({
+      kind: 'round-close',
+      waitMessage: 'Rundenabschluss hängt fest.',
+      request: () => runtime.closeRound({
+        caseId: event.caseId,
+        resolvedOptionId: roundDecision.optionId,
+        voteSummary: buildRoundVoteSummary(),
+      }),
+      errorMessage: 'Rundenabschluss konnte nicht übertragen werden.',
+    });
+    setMultiplayerStatus('Host bestätigt den Rundenabschluss über das Relay.');
+    return;
+  }
+
+  setMultiplayerStatus('Warte auf den host-autoritativen Rundenabschluss.');
+}
+
+function applyAcceptedRoundClose(event: Extract<TransportEvent, { eventName: 'round-closed' }>): void {
+  const caseData = CASES[state.currentCase];
+  if (!caseData) {
+    return;
+  }
+
+  const decision = caseData.decisions.find((entry) => entry.id === event.resolvedOptionId) ?? null;
+  if (!decision) {
+    return;
+  }
+
+  pendingDecision = decision;
+  showConsequence(decision, getResolvedVoteCount(event.resolvedOptionId));
+}
+
+function handleMultiplayerTransportEvent(event: TransportEvent): void {
+  if (event.eventName === 'game-created') {
+    setMultiplayerStatus(`Relay-Raum ${event.gameId} aktiv. Rollen koennen jetzt online geclaimt werden.`);
+    return;
+  }
+
+  if (event.eventName === 'state-sync-sent') {
+    clearPendingMultiplayerRequest();
+    state = event.snapshot.state;
+    syncRoleSelectionFromOwners();
+    updateRoleFlowAfterTransport();
+
+    if (state.selectedRole && state.activeRoles.length >= 2) {
+      showScreen('screen-game');
+      if (isCurrentRoleOwnedLocally()) {
+        showCurrentTurnPrompt('Du bist jetzt online am Zug.');
+      } else {
+        renderCase();
+      }
+    }
+
+    setMultiplayerStatus(`State-Sync empfangen. Raum ${event.gameId} ist bereit.`);
+    return;
+  }
+
+  if (event.eventName === 'role-claimed') {
+    const roleEvent = event;
+
+    if (isAcceptedRoleClaim(event)) {
+      if (roleEvent.claimedByPlayerId === multiplayer?.playerId) {
+        clearPendingMultiplayerRequest();
+      }
+      addActiveRoleById(roleEvent.roleId);
+      updateRoleFlowAfterTransport();
+
+      if (roleEvent.claimedByPlayerId === multiplayer?.playerId) {
+        setMultiplayerStatus(`Rolle ${ROLES.find((role) => role.id === roleEvent.roleId)?.name ?? roleEvent.roleId} ist dir zugewiesen.`);
+      } else {
+        setMultiplayerStatus(`Rolle ${ROLES.find((role) => role.id === roleEvent.roleId)?.name ?? roleEvent.roleId} wurde im Raum vergeben.`);
+      }
+      return;
+    }
+
+    if (roleEvent.claimedByPlayerId === multiplayer?.playerId) {
+      clearPendingMultiplayerRequest();
+      setMultiplayerStatus(`Rollenwahl abgelehnt: ${roleEvent.rejectionReason ?? 'unbekannter Grund'}.`);
+    }
+    return;
+  }
+
+  if (event.eventName === 'vote-cast') {
+    const voteEvent = event;
+
+    if (isAcceptedVote(event)) {
+      if (voteEvent.playerId === multiplayer?.playerId) {
+        clearPendingMultiplayerRequest();
+      }
+      applyAcceptedVote(voteEvent);
+      return;
+    }
+
+    if (voteEvent.playerId === multiplayer?.playerId) {
+      clearPendingMultiplayerRequest();
+      setMultiplayerStatus(`Stimme abgelehnt: ${voteEvent.rejectionReason ?? 'unbekannter Grund'}.`);
+    }
+    return;
+  }
+
+  if (event.eventName === 'round-closed') {
+    const roundCloseEvent = event;
+
+    if (isAcceptedRoundClose(event)) {
+      clearPendingMultiplayerRequest();
+      applyAcceptedRoundClose(roundCloseEvent);
+      setMultiplayerStatus('Rundenabschluss bestätigt.');
+      return;
+    }
+
+    if (multiplayer?.isHost) {
+      clearPendingMultiplayerRequest();
+      setMultiplayerStatus(`Rundenabschluss abgelehnt: ${roundCloseEvent.rejectionReason ?? 'unbekannter Grund'}.`);
+    }
+  }
+}
+
+function startRelayHost(): void {
+  const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
+  const relayUrl = relayInput?.value.trim() || 'http://localhost:7000/';
+  const url = new URL(window.location.href);
+  url.searchParams.set('mp', 'host');
+  url.searchParams.set('game', crypto.randomUUID().slice(0, 8));
+  url.searchParams.set('relay', relayUrl);
+  window.location.href = url.toString();
+}
+
+function joinRelayGame(): void {
+  const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
+  const gameInput = document.getElementById('multiplayer-game-input') as HTMLInputElement | null;
+  const relayUrl = relayInput?.value.trim() || 'http://localhost:7000/';
+  const gameId = gameInput?.value.trim();
+
+  if (!gameId) {
+    setMultiplayerStatus('Bitte zuerst einen Raumcode eingeben.');
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set('mp', 'join');
+  url.searchParams.set('game', gameId);
+  url.searchParams.set('relay', relayUrl);
+  window.location.href = url.toString();
 }
 
 // ============================================================
@@ -160,6 +542,18 @@ function getCurrentRolePosition(): number {
 }
 
 function getRoleSelectionHint(): string {
+  if (isMultiplayerMode()) {
+    if (!state.activeRoles.length) {
+      return 'Claimt mindestens zwei Rollen im Relay-Raum, bevor ihr die erste Runde lokal öffnet.';
+    }
+
+    const names = state.activeRoles.map((role) => {
+      const suffix = multiplayer?.ownsRole(role.id) ? ' (du)' : '';
+      return `${role.name}${suffix}`;
+    }).join(', ');
+    return `${state.activeRoles.length} Online-Rollen aktiv: ${names}.`;
+  }
+
   if (!state.activeRoles.length) {
     return 'Waehle mindestens zwei Rollen fuer eine gemeinsame Ratsrunde.';
   }
@@ -173,9 +567,25 @@ function getRoleSelectionHint(): string {
 
 function updateRoleSelectionUI(): void {
   document.querySelectorAll<HTMLElement>('.role-select-card').forEach((card) => {
+    const roleId = card.dataset.roleId ?? '';
     const isSelected = state.activeRoles.some((role) => card.id === `role-card-${role.id}`);
+    const isOwnedLocally = roleId ? Boolean(multiplayer?.ownsRole(roleId)) : false;
+    const isTakenRemotely = roleId ? state.activeRoles.some((role) => role.id === roleId) && !isOwnedLocally : false;
+    const ownerIndicator = card.querySelector<HTMLElement>('.role-owner-indicator');
+
     card.classList.toggle('selected', isSelected);
     card.setAttribute('aria-pressed', String(isSelected));
+    card.setAttribute('aria-disabled', String(isMultiplayerMode() && isTakenRemotely));
+    card.style.opacity = isMultiplayerMode() && isTakenRemotely ? '0.6' : '1';
+    if (ownerIndicator) {
+      ownerIndicator.textContent = isOwnedLocally
+        ? 'Deine Rolle'
+        : isTakenRemotely
+          ? 'Bereits vergeben'
+          : isMultiplayerMode()
+            ? 'Online frei'
+            : '';
+    }
   });
 
   const btn = document.getElementById('btn-start-game') as HTMLButtonElement | null;
@@ -197,15 +607,24 @@ function showCurrentTurnPrompt(details?: string): void {
   if (!overlay || !icon || !title || !text || !reflexion || !changesEl) return;
 
   const councilPreVote = getCurrentCouncilPreVote();
+  const localTurn = !isMultiplayerMode() || isCurrentRoleOwnedLocally();
   const preVoteText = councilPreVote
     ? `Der Rat würde vorläufig für „${councilPreVote.text}“ stimmen, sofern ihr das nicht überstimmt.`
     : '';
 
   icon.textContent = state.selectedRole?.icon ?? '👤';
   title.textContent = state.selectedRole?.name ?? 'Naechste Rolle';
-  text.textContent = 'Du bist am Zug.';
+  text.textContent = isMultiplayerMode()
+    ? localTurn
+      ? 'Du bist jetzt online am Zug.'
+      : `${state.selectedRole?.name ?? 'Die nächste Rolle'} stimmt jetzt in einer anderen Sitzung ab.`
+    : 'Du bist am Zug.';
   reflexion.textContent = [
-    details ?? 'Lest den Fall gemeinsam und gebt das Geraet erst nach deiner Stimmabgabe weiter.',
+    details ?? (isMultiplayerMode()
+      ? localTurn
+        ? 'Gib deine Stimme in diesem Browser ab. Die Annahme wird host-autoritativ über das Relay bestätigt.'
+        : 'Warte auf die aktuelle Online-Rolle. Nach OK siehst du denselben Fall im Lesemodus.'
+      : 'Lest den Fall gemeinsam und gebt das Geraet erst nach deiner Stimmabgabe weiter.'),
     preVoteText,
   ]
     .filter(Boolean)
@@ -232,11 +651,13 @@ function showNextRoundPrompt(): void {
 
   icon.textContent = state.selectedRole?.icon ?? '👤';
   title.textContent = 'Nächste Runde';
-  text.textContent = `${state.selectedRole?.name ?? 'Die nächste Rolle'} ist jetzt dran.`;
+  text.textContent = isMultiplayerMode()
+    ? `${state.selectedRole?.name ?? 'Die nächste Rolle'} ist jetzt im Relay-Raum dran.`
+    : `${state.selectedRole?.name ?? 'Die nächste Rolle'} ist jetzt dran.`;
   reflexion.textContent = nextCase
-    ? `Als Nächstes liegt ${nextCase.ki} vor euch: ${nextCase.title}. Erst nach OK wird der neue Fall eingeblendet.`
+    ? `Als Nächstes liegt ${nextCase.ki} vor euch: ${nextCase.title}. ${isMultiplayerMode() ? 'Alle Clients öffnen danach denselben Fall lokal.' : 'Erst nach OK wird der neue Fall eingeblendet.'}`
     : 'Erst nach OK wird die nächste Runde eingeblendet.';
-  changesEl.innerHTML = '<span class="value-change-item change-shift">Gerät übergeben</span>';
+  changesEl.innerHTML = `<span class="value-change-item change-shift">${isMultiplayerMode() ? 'Nächste Online-Rolle' : 'Gerät übergeben'}</span>`;
 
   pendingOverlayAction = 'render-case';
   overlay.classList.remove('hidden');
@@ -253,6 +674,7 @@ function initRolesScreen(): void {
     const card = document.createElement('div');
     card.className = 'role-select-card';
     card.id = `role-card-${role.id}`;
+    card.dataset.roleId = role.id;
     card.tabIndex = 0;
     card.innerHTML = `
       <div class="role-icon-lg">${role.icon}</div>
@@ -260,6 +682,7 @@ function initRolesScreen(): void {
       <div style="font-size:0.82em;color:var(--text-dim);margin-bottom:8px">${role.perspective}</div>
       <div style="font-size:0.88em;line-height:1.6">${role.desc}</div>
       <div class="role-ability">${role.abilityDescription}</div>
+      <div class="role-owner-indicator" style="margin-top:10px;font-size:0.76em;color:var(--text-dim)"></div>
     `;
     card.addEventListener('click', () => selectRole(role.id));
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') selectRole(role.id); });
@@ -270,6 +693,17 @@ function initRolesScreen(): void {
 }
 
 function selectRole(roleId: string): void {
+  if (isMultiplayerMode()) {
+    runMultiplayerRequest({
+      kind: 'role-claim',
+      waitMessage: `Rollenclaim für ${ROLES.find((role) => role.id === roleId)?.name ?? roleId} hängt fest.`,
+      request: () => multiplayer?.claimRole(roleId) ?? Promise.resolve(),
+      errorMessage: 'Rollenclaim fehlgeschlagen.',
+    });
+    setMultiplayerStatus(`Rollenclaim für ${ROLES.find((role) => role.id === roleId)?.name ?? roleId} gesendet.`);
+    return;
+  }
+
   const result = assignRole(state, roleId);
   if (!result.ok) return;
   state = result.state;
@@ -288,6 +722,14 @@ function startGame(): void {
     selectedLens: null,
   });
   showScreen('screen-game');
+  updateSidebar();
+
+  if (isMultiplayerMode() && !isCurrentRoleOwnedLocally()) {
+    setMultiplayerStatus(`Die Runde ist offen. Warte auf ${state.selectedRole?.name ?? 'die erste Rolle'} im Relay-Raum.`);
+    renderCase();
+    return;
+  }
+
   showCurrentTurnPrompt('Die erste Ratsstimme beginnt jetzt. Nach OK wird der aktuelle Fall eingeblendet.');
 }
 
@@ -345,6 +787,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   const availableDecisions = getAvailableDecisions(caseData);
   const voteCount = getCurrentRoundVoteCount();
   const modeLabel = state.tieBreakOptions ? 'Stichwahl' : 'Ratsrunde';
+  const canVoteHere = (!isMultiplayerMode() || isCurrentRoleOwnedLocally()) && !isAwaitingVoteConfirmation();
 
   panel.innerHTML = `
     <div class="scenario-tag ${caseData.tagClass}">${caseData.tag}</div>
@@ -374,7 +817,11 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
 
     <div>
       <div class="panel-title">⚡ Entscheidung treffen</div>
-      <div class="decision-guidance">${DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Die Runde bleibt verdeckt, bis alle aktiven Rollen abgestimmt haben.'}</div>
+      <div class="decision-guidance">${canVoteHere
+        ? (DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Die Runde bleibt verdeckt, bis alle aktiven Rollen abgestimmt haben.')
+        : isAwaitingVoteConfirmation()
+          ? 'Deine Stimme wurde gesendet. Warte auf die host-autoritative Bestätigung.'
+          : 'Warte auf die Rolle, die in diesem Relay-Raum gerade stimmberechtigt ist.'}</div>
       <div id="decision-timer-box" class="decision-timer">
         <div class="timer-label">
           <span>Beratungszeit</span>
@@ -388,9 +835,8 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
         .map((d) => {
           const tags = formatEffectTags(getAppliedRoundEffect(d.effects) as Record<string, number>, 'decision');
           return `
-          <div class="decision-card" tabindex="0"
-               onclick="handleDecision('${d.id}')"
-               onkeydown="if(event.key==='Enter'||event.key===' ')handleDecision('${d.id}')">
+          <div class="decision-card" tabindex="0" style="${canVoteHere ? '' : 'opacity:0.5;pointer-events:none;'}"
+               ${canVoteHere ? `onclick="handleDecision('${d.id}')" onkeydown="if(event.key==='Enter'||event.key===' ')handleDecision('${d.id}')"` : ''}>
             <div class="decision-text">${d.icon} ${d.text}</div>
             <div class="decision-effects">${tags}</div>
           </div>`;
@@ -448,6 +894,10 @@ function selectLens(lensId: string, caseData: typeof CASES[0]): void {
 function handleDecision(optionId: string): void {
   const caseData = CASES[state.currentCase];
   if (!caseData) return;
+  if (isMultiplayerMode() && !isCurrentRoleOwnedLocally()) {
+    setMultiplayerStatus('Diese Stimme gehört in dieser Runde einer anderen Sitzung.');
+    return;
+  }
   const availableDecisions = getAvailableDecisions(caseData);
   const option = availableDecisions.find((d) => d.id === optionId);
   if (!option) return;
@@ -461,6 +911,26 @@ function handleDecision(optionId: string): void {
   }
 
   const optionIds = availableDecisions.map((decision) => decision.id);
+
+  if (isMultiplayerMode() && state.selectedRole) {
+    const selectedRole = state.selectedRole;
+    clearTimer();
+    runMultiplayerRequest({
+      kind: 'vote',
+      waitMessage: `Stimme für ${option.text} hängt fest.`,
+      request: () => multiplayer?.castVote({
+        caseId: state.currentCase + 1,
+        roleId: selectedRole.id,
+        optionId: option.id,
+        isTieBreak: Boolean(state.tieBreakOptions),
+      }) ?? Promise.resolve(),
+      errorMessage: 'Stimme konnte nicht übertragen werden.',
+    });
+    setMultiplayerStatus(`Stimme für ${option.text} gesendet. Warte auf Bestätigung.`);
+    renderCase();
+    return;
+  }
+
   const voteResult = castVote(state, state.currentCase + 1, option.id, optionIds);
   if (!voteResult.ok) return;
 
@@ -522,11 +992,15 @@ function showHandoverNotice(votedRoleName: string, nextRoleName: string): void {
 
   icon.textContent = state.selectedRole?.icon ?? '👤';
   title.textContent = 'Nächste Stimme';
-  text.textContent = `Jetzt stimmt Spieler ${getCurrentRolePosition()}${state.activeRoles.length ? ` von ${state.activeRoles.length}` : ''}: ${nextRoleName}.`;
+  text.textContent = isMultiplayerMode()
+    ? `${nextRoleName} ist jetzt im Relay-Raum dran.`
+    : `Jetzt stimmt Spieler ${getCurrentRolePosition()}${state.activeRoles.length ? ` von ${state.activeRoles.length}` : ''}: ${nextRoleName}.`;
   reflexion.textContent = currentCase
-    ? `${votedRoleName} hat bereits abgestimmt. ${nextRoleName} soll jetzt über Fall ${state.currentCase + 1} abstimmen: ${currentCase.title}. Erst nach OK wird derselbe Fall für die nächste Stimme eingeblendet.`
-    : `${votedRoleName} hat bereits abgestimmt. Bitte gebt das Geraet jetzt an ${nextRoleName} weiter.`;
-  changesEl.innerHTML = '<span class="value-change-item change-shift">Gerät weitergeben</span>';
+    ? (isMultiplayerMode()
+      ? `${votedRoleName} hat bereits abgestimmt. ${nextRoleName} stimmt jetzt in der eigenen Sitzung über Fall ${state.currentCase + 1} ab: ${currentCase.title}.`
+      : `${votedRoleName} hat bereits abgestimmt. ${nextRoleName} soll jetzt über Fall ${state.currentCase + 1} abstimmen: ${currentCase.title}. Erst nach OK wird derselbe Fall für die nächste Stimme eingeblendet.`)
+    : `${votedRoleName} hat bereits abgestimmt. ${isMultiplayerMode() ? `${nextRoleName} ist jetzt online dran.` : `Bitte gebt das Geraet jetzt an ${nextRoleName} weiter.`}`;
+  changesEl.innerHTML = `<span class="value-change-item change-shift">${isMultiplayerMode() ? 'Nächste Online-Stimme' : 'Gerät weitergeben'}</span>`;
 
   pendingOverlayAction = 'render-case';
   overlay.classList.remove('hidden');
@@ -654,7 +1128,7 @@ function closeConsequence(): void {
   pendingDecision = null;
   pendingOverlayAction = 'none';
 
-  const lensName = state.selectedLens?.name ?? '–';
+  const lensName = isMultiplayerMode() ? '–' : state.selectedLens?.name ?? '–';
 
   // Effekte über Runden-Abschluss anwenden
   let modifiedEffect = { ...option.effects };
@@ -880,6 +1354,10 @@ function renderAbilityControl(available: boolean): string {
   if (!state.selectedRole) return '';
   const role = state.selectedRole;
 
+  if (isMultiplayerMode()) {
+    return '<div style="font-size:0.76em;color:var(--text-dim);margin-top:6px">Relay-Modus: Sonderfähigkeiten sind vorerst deaktiviert, damit alle Clients denselben Zustand behalten.</div>';
+  }
+
   if (role.id === 'sozialarbeiterin') {
     return `<div style="font-size:0.76em;color:#7fb3e8;margin-top:6px">⭐ Passiv: Betroffene Gruppe wird pro Fall automatisch sichtbar (+Gerechtigkeit, +Frieden).</div>`;
   }
@@ -898,6 +1376,11 @@ function renderAbilityControl(available: boolean): string {
 // SONDERFÄHIGKEIT
 // ============================================================
 function triggerAbility(): void {
+  if (isMultiplayerMode()) {
+    setMultiplayerStatus('Sonderfähigkeiten sind im Relay-Modus noch nicht synchronisiert.');
+    return;
+  }
+
   const result = activateAbility(state);
   if (!result.ok) return;
   state = result.state;
@@ -1107,6 +1590,13 @@ function showEmergencyEnding(badge: string): void {
 }
 
 function resetGame(): void {
+  if (isMultiplayerMode()) {
+    window.location.href = window.location.href;
+    return;
+  }
+
+  multiplayer?.destroy();
+  multiplayer = null;
   state = createGame();
   clearTimer();
   timerRemaining = DECISION_TIMER_SECONDS;
@@ -1134,6 +1624,8 @@ declare global {
     showEnding: typeof showEnding;
     showPaxEnding: typeof showPaxEnding;
     resetGame: typeof resetGame;
+    startRelayHost: typeof startRelayHost;
+    joinRelayGame: typeof joinRelayGame;
   }
 }
 
@@ -1148,9 +1640,25 @@ window.triggerAbility = triggerAbility;
 window.showEnding = showEnding;
 window.showPaxEnding = showPaxEnding;
 window.resetGame = resetGame;
+window.startRelayHost = startRelayHost;
+window.joinRelayGame = joinRelayGame;
 
 // ============================================================
 // INIT
 // ============================================================
+if (MULTIPLAYER_CONFIG) {
+  multiplayer = new RelayMultiplayerRuntime({
+    config: MULTIPLAYER_CONFIG,
+    rulesVersion: MULTIPLAYER_RULES_VERSION,
+    maxPlayers: ROLES.length,
+    validRoleIds: ROLES.map((role) => role.id),
+    getCurrentRoundId,
+    getAuthoritativeState: () => state,
+  });
+  multiplayer.onEvent(handleMultiplayerTransportEvent);
+  multiplayer.start();
+}
+
 initRolesScreen();
-showScreen('screen-start');
+updateMultiplayerStatusUI();
+showScreen(MULTIPLAYER_CONFIG ? 'screen-roles' : 'screen-start');

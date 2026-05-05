@@ -27,6 +27,25 @@
       <button class="btn btn-primary" onclick="showScreen('screen-intro')" style="font-size:1.1em;padding:17px 38px">
         🚀 Spiel beginnen
       </button>
+      <div class="panel max-800" style="margin:24px auto 0;text-align:left">
+        <div style="font-weight:bold;color:var(--gold);margin-bottom:10px">🛰️ Relay-Mehrspieler</div>
+        <div style="font-size:0.9em;line-height:1.6;color:var(--text-dim);margin-bottom:12px">Host oder Join laufen über Raumcode plus Relay-URL. Standard ist das lokale Test-Relay auf localhost:7000.</div>
+        <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:12px">
+          <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
+            Relay-URL
+            <input id="multiplayer-relay-input" type="text" value="http://localhost:7000/" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
+            Raumcode
+            <input id="multiplayer-game-input" type="text" placeholder="z. B. genesis-raum" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
+          </label>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn btn-secondary" onclick="startRelayHost()">Raum hosten</button>
+          <button class="btn btn-secondary" onclick="joinRelayGame()">Raum beitreten</button>
+        </div>
+        <div id="multiplayer-status" style="font-size:0.82em;color:var(--text-dim)">Kein Relay-Mehrspieler aktiv.</div>
+      </div>
       <div style="margin-top:18px;font-size:0.82em;color:var(--text-dim)">
         Für Unterricht | Jugendbildung | Ethik-Seminare
         <br>OER-Lizenz: <a style="color:var(--text-dim)" href="https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0 (Public Domain)</a>
@@ -129,6 +148,20 @@
         <div class="text-center mb-20">
           <h2 class="roles-title">👥 Wählt eure Rollen</h2>
           <p style="color:var(--text-dim)">Vergibt die Ratsrollen einmalig. Mindestens zwei Rollen muessen aktiv sein, bevor die gemeinsame Runde startet.</p>
+        </div>
+        <div class="panel" id="multiplayer-room-box" style="margin-bottom:16px;text-align:left">
+          <div style="font-weight:bold;color:var(--gold);margin-bottom:10px">🛰️ Aktiver Relay-Raum</div>
+          <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:10px">
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
+              Raumcode
+              <input id="multiplayer-room-code" type="text" readonly style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
+              Join-Link
+              <input id="multiplayer-invite-link" type="text" readonly style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
+            </label>
+          </div>
+          <div id="roles-multiplayer-status" style="font-size:0.82em;color:var(--text-dim)">Kein Relay-Mehrspieler aktiv.</div>
         </div>
         <div class="roles-grid" id="roles-grid"></div>
         <div class="text-center">
