@@ -1,11 +1,13 @@
 import type {
   GameCreatedEvent,
+  RoundClosedEvent,
   RoleClaimedEvent,
   StateSnapshot,
   StateSyncRequestedEvent,
   StateSyncSentEvent,
   TransportClientInfo,
   TransportEnvelope,
+  VoteCastEvent,
 } from './types.js';
 
 export interface TransportEventFactoryOptions {
@@ -64,6 +66,84 @@ export class TransportEventFactory {
       roleId: params.roleId,
       claimedByPlayerId: params.claimedByPlayerId,
       claimStatus: params.claimStatus,
+      authoritativePlayerId: this.clientInfo.playerId,
+      rejectionReason: params.rejectionReason,
+    };
+  }
+
+  createVoteCastRequested(params: {
+    roundId: string;
+    caseId: number;
+    roleId: string;
+    optionId: string;
+    isTieBreak: boolean;
+  }): VoteCastEvent {
+    return {
+      ...this.createEnvelope<'vote-cast'>('vote-cast', params.roundId),
+      caseId: params.caseId,
+      roleId: params.roleId,
+      optionId: params.optionId,
+      isTieBreak: params.isTieBreak,
+      voteStatus: 'requested',
+    };
+  }
+
+  createVoteCastResolved(params: {
+    roundId: string;
+    caseId: number;
+    roleId: string;
+    optionId: string;
+    claimedByPlayerId: string;
+    isTieBreak: boolean;
+    voteStatus: 'accepted' | 'rejected';
+    rejectionReason?: VoteCastEvent['rejectionReason'];
+  }): VoteCastEvent {
+    return {
+      ...this.createEnvelope<'vote-cast'>('vote-cast', params.roundId),
+      playerId: params.claimedByPlayerId,
+      caseId: params.caseId,
+      roleId: params.roleId,
+      optionId: params.optionId,
+      isTieBreak: params.isTieBreak,
+      voteStatus: params.voteStatus,
+      authoritativePlayerId: this.clientInfo.playerId,
+      rejectionReason: params.rejectionReason,
+    };
+  }
+
+  createRoundClosedRequested(params: {
+    roundId: string;
+    caseId: number;
+    resolvedOptionId: string;
+    voteSummary: RoundClosedEvent['voteSummary'];
+  }): RoundClosedEvent {
+    return {
+      ...this.createEnvelope<'round-closed'>('round-closed', params.roundId),
+      caseId: params.caseId,
+      resolvedOptionId: params.resolvedOptionId,
+      closedByPlayerId: this.clientInfo.playerId,
+      voteSummary: params.voteSummary,
+      roundCloseStatus: 'requested',
+    };
+  }
+
+  createRoundClosedResolved(params: {
+    roundId: string;
+    caseId: number;
+    resolvedOptionId: string;
+    closedByPlayerId: string;
+    voteSummary: RoundClosedEvent['voteSummary'];
+    roundCloseStatus: 'accepted' | 'rejected';
+    rejectionReason?: RoundClosedEvent['rejectionReason'];
+  }): RoundClosedEvent {
+    return {
+      ...this.createEnvelope<'round-closed'>('round-closed', params.roundId),
+      playerId: params.closedByPlayerId,
+      caseId: params.caseId,
+      resolvedOptionId: params.resolvedOptionId,
+      closedByPlayerId: params.closedByPlayerId,
+      voteSummary: params.voteSummary,
+      roundCloseStatus: params.roundCloseStatus,
       authoritativePlayerId: this.clientInfo.playerId,
       rejectionReason: params.rejectionReason,
     };

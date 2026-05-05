@@ -209,6 +209,263 @@ describe('LocalBus', () => {
     unsubscribe();
     bus.destroy();
   });
+
+  it('bestaetigt Stimmen des Rollenbesitzers und lehnt doppelte oder fremde Stimmen ab', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerA = createEphemeralTransportSession(false);
+    const joinerB = createEphemeralTransportSession(false);
+    const factoryA = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerA.clientInfo,
+    });
+    const factoryB = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerB.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: createGame(),
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(
+      factoryA.createRoleClaimRequested({
+        roundId: 'round-0',
+        roleId: 'prophetin',
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(
+      factoryA.createVoteCastRequested({
+        roundId: 'round-0',
+        caseId: 1,
+        roleId: 'prophetin',
+        optionId: 'sophia-1-a',
+        isTieBreak: false,
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(
+      factoryA.createVoteCastRequested({
+        roundId: 'round-0',
+        caseId: 1,
+        roleId: 'prophetin',
+        optionId: 'sophia-1-b',
+        isTieBreak: false,
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(
+      factoryB.createVoteCastRequested({
+        roundId: 'round-0',
+        caseId: 1,
+        roleId: 'prophetin',
+        optionId: 'sophia-1-c',
+        isTieBreak: false,
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const acceptedVote = received.find(
+      (event) =>
+        event.eventName === 'vote-cast' &&
+        event.voteStatus === 'accepted' &&
+        event.roleId === 'prophetin' &&
+        event.playerId === joinerA.clientInfo.playerId
+    );
+    const duplicateVote = received.find(
+      (event) =>
+        event.eventName === 'vote-cast' &&
+        event.voteStatus === 'rejected' &&
+        event.roleId === 'prophetin' &&
+        event.playerId === joinerA.clientInfo.playerId &&
+        event.rejectionReason === 'ALREADY_VOTED'
+    );
+    const foreignVote = received.find(
+      (event) =>
+        event.eventName === 'vote-cast' &&
+        event.voteStatus === 'rejected' &&
+        event.roleId === 'prophetin' &&
+        event.playerId === joinerB.clientInfo.playerId &&
+        event.rejectionReason === 'ROLE_NOT_OWNED'
+    );
+
+    expect(acceptedVote).toMatchObject({
+      eventName: 'vote-cast',
+      voteStatus: 'accepted',
+      roleId: 'prophetin',
+      optionId: 'sophia-1-a',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    expect(duplicateVote).toMatchObject({
+      eventName: 'vote-cast',
+      voteStatus: 'rejected',
+      roleId: 'prophetin',
+      rejectionReason: 'ALREADY_VOTED',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    expect(foreignVote).toMatchObject({
+      eventName: 'vote-cast',
+      voteStatus: 'rejected',
+      roleId: 'prophetin',
+      rejectionReason: 'ROLE_NOT_OWNED',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('bestaetigt gueltigen Rundenabschluss und lehnt unvollstaendige Abschluesse ab', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerA = createEphemeralTransportSession(false);
+    const joinerB = createEphemeralTransportSession(false);
+    const joinerC = createEphemeralTransportSession(false);
+    const factoryA = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerA.clientInfo,
+    });
+    const factoryB = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerB.clientInfo,
+    });
+    const factoryC = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerC.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: createGame(),
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    const roleClaims = [
+      factoryA.createRoleClaimRequested({ roundId: 'round-0', roleId: 'buergerin' }),
+      factoryB.createRoleClaimRequested({ roundId: 'round-0', roleId: 'prophetin' }),
+      factoryC.createRoleClaimRequested({ roundId: 'round-0', roleId: 'juristin' }),
+    ];
+
+    for (const claim of roleClaims) {
+      await bus.publish(claim);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    const earlyClose = factoryA.createRoundClosedRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      resolvedOptionId: 'sophia-1-a',
+      voteSummary: [],
+    });
+    await bus.publish(earlyClose);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const voteEvents = [
+      factoryA.createVoteCastRequested({ roundId: 'round-0', caseId: 1, roleId: 'buergerin', optionId: 'sophia-1-a', isTieBreak: false }),
+      factoryB.createVoteCastRequested({ roundId: 'round-0', caseId: 1, roleId: 'prophetin', optionId: 'sophia-1-a', isTieBreak: false }),
+      factoryC.createVoteCastRequested({ roundId: 'round-0', caseId: 1, roleId: 'juristin', optionId: 'sophia-1-b', isTieBreak: false }),
+    ];
+
+    for (const vote of voteEvents) {
+      await bus.publish(vote);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    const validClose = factoryA.createRoundClosedRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      resolvedOptionId: 'sophia-1-a',
+      voteSummary: [
+        { roleId: 'buergerin', optionId: 'sophia-1-a', playerId: joinerA.clientInfo.playerId },
+        { roleId: 'prophetin', optionId: 'sophia-1-a', playerId: joinerB.clientInfo.playerId },
+        { roleId: 'juristin', optionId: 'sophia-1-b', playerId: joinerC.clientInfo.playerId },
+      ],
+    });
+    await bus.publish(validClose);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rejectedClose = received.find(
+      (event) =>
+        event.eventName === 'round-closed' &&
+        event.roundCloseStatus === 'rejected' &&
+        event.rejectionReason === 'INCOMPLETE_VOTES'
+    );
+    const acceptedClose = received.find(
+      (event) =>
+        event.eventName === 'round-closed' &&
+        event.roundCloseStatus === 'accepted' &&
+        event.resolvedOptionId === 'sophia-1-a'
+    );
+
+    expect(rejectedClose).toMatchObject({
+      eventName: 'round-closed',
+      roundCloseStatus: 'rejected',
+      rejectionReason: 'INCOMPLETE_VOTES',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    expect(acceptedClose).toMatchObject({
+      eventName: 'round-closed',
+      roundCloseStatus: 'accepted',
+      resolvedOptionId: 'sophia-1-a',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
 });
 
 describe('createEphemeralTransportSession', () => {

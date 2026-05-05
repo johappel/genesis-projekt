@@ -54,6 +54,9 @@ export interface VoteCastEvent extends TransportEnvelope {
   roleId: string;
   optionId: string;
   isTieBreak: boolean;
+  voteStatus: 'requested' | 'accepted' | 'rejected';
+  authoritativePlayerId?: string;
+  rejectionReason?: 'ROLE_NOT_CLAIMED' | 'ROLE_NOT_OWNED' | 'ALREADY_VOTED' | 'ROUND_MISMATCH';
 }
 
 export interface RoundClosedEvent extends TransportEnvelope {
@@ -62,6 +65,9 @@ export interface RoundClosedEvent extends TransportEnvelope {
   resolvedOptionId: string;
   closedByPlayerId: string;
   voteSummary: VoteSummaryEntry[];
+  roundCloseStatus: 'requested' | 'accepted' | 'rejected';
+  authoritativePlayerId?: string;
+  rejectionReason?: 'INCOMPLETE_VOTES' | 'INVALID_RESULT' | 'ROUND_MISMATCH' | 'ROUND_ALREADY_CLOSED';
 }
 
 export interface PlayerLeftEvent extends TransportEnvelope {

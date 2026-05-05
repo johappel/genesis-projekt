@@ -1,6 +1,6 @@
 import { TransportEventFactory } from './eventFactory.js';
 import type { EphemeralTransportSession } from './session.js';
-import type { RoleClaimedEvent, StateSnapshot, TransportMessageBus } from './types.js';
+import type { RoleClaimedEvent, RoundClosedEvent, StateSnapshot, TransportMessageBus, VoteCastEvent } from './types.js';
 
 export interface HostAuthorityOptions {
   bus: TransportMessageBus;
@@ -31,6 +31,10 @@ export class HostAuthority {
   private readonly eventFactory: TransportEventFactory;
 
   private readonly acceptedRoleOwners: Record<string, string> = {};
+
+  private readonly acceptedVotesByRound: Record<string, Record<string, VoteCastEvent>> = {};
+
+  private readonly closedRounds = new Set<string>();
 
   private unsubscribe: (() => void) | null = null;
 
@@ -69,6 +73,16 @@ export class HostAuthority {
 
       if (event.eventName === 'role-claimed' && event.claimStatus === 'requested') {
         void this.handleRoleClaimRequested(event);
+        return;
+      }
+
+      if (event.eventName === 'vote-cast' && event.voteStatus === 'requested') {
+        void this.handleVoteCastRequested(event);
+        return;
+      }
+
+      if (event.eventName === 'round-closed' && event.roundCloseStatus === 'requested') {
+        void this.handleRoundClosedRequested(event);
       }
     });
   }
@@ -105,6 +119,37 @@ export class HostAuthority {
       roleId: event.roleId,
       claimedByPlayerId: event.claimedByPlayerId,
       claimStatus: resolution.claimStatus,
+      rejectionReason: resolution.rejectionReason,
+    });
+
+    await this.bus.publish(response);
+  }
+
+  private async handleVoteCastRequested(event: VoteCastEvent): Promise<void> {
+    const resolution = this.resolveVoteCast(event);
+    const response = this.eventFactory.createVoteCastResolved({
+      roundId: this.getCurrentRoundId(),
+      caseId: event.caseId,
+      roleId: event.roleId,
+      optionId: event.optionId,
+      claimedByPlayerId: event.playerId,
+      isTieBreak: event.isTieBreak,
+      voteStatus: resolution.voteStatus,
+      rejectionReason: resolution.rejectionReason,
+    });
+
+    await this.bus.publish(response);
+  }
+
+  private async handleRoundClosedRequested(event: RoundClosedEvent): Promise<void> {
+    const resolution = this.resolveRoundClosed(event);
+    const response = this.eventFactory.createRoundClosedResolved({
+      roundId: this.getCurrentRoundId(),
+      caseId: event.caseId,
+      resolvedOptionId: event.resolvedOptionId,
+      closedByPlayerId: event.closedByPlayerId,
+      voteSummary: event.voteSummary,
+      roundCloseStatus: resolution.roundCloseStatus,
       rejectionReason: resolution.rejectionReason,
     });
 
@@ -157,4 +202,149 @@ export class HostAuthority {
       claimStatus: 'accepted',
     };
   }
+
+  private resolveVoteCast(event: VoteCastEvent): {
+    voteStatus: 'accepted' | 'rejected';
+    rejectionReason?: VoteCastEvent['rejectionReason'];
+  } {
+    if (event.roundId !== this.getCurrentRoundId()) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
+    const roleOwners = this.getMergedSnapshot().roleOwners;
+    const ownerPlayerId = roleOwners[event.roleId];
+    if (!ownerPlayerId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_CLAIMED',
+      };
+    }
+
+    if (ownerPlayerId !== event.playerId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_OWNED',
+      };
+    }
+
+    const roundVotes = this.acceptedVotesByRound[event.roundId] ?? {};
+    if (roundVotes[event.roleId]) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ALREADY_VOTED',
+      };
+    }
+
+    this.acceptedVotesByRound[event.roundId] = {
+      ...roundVotes,
+      [event.roleId]: event,
+    };
+
+    return {
+      voteStatus: 'accepted',
+    };
+  }
+
+  private resolveRoundClosed(event: RoundClosedEvent): {
+    roundCloseStatus: 'accepted' | 'rejected';
+    rejectionReason?: RoundClosedEvent['rejectionReason'];
+  } {
+    if (event.roundId !== this.getCurrentRoundId()) {
+      return {
+        roundCloseStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
+    if (this.closedRounds.has(event.roundId)) {
+      return {
+        roundCloseStatus: 'rejected',
+        rejectionReason: 'ROUND_ALREADY_CLOSED',
+      };
+    }
+
+    const claimedRoles = Object.keys(this.getMergedSnapshot().roleOwners);
+    const acceptedVotes = Object.values(this.acceptedVotesByRound[event.roundId] ?? {});
+    if (!claimedRoles.length || acceptedVotes.length !== claimedRoles.length) {
+      return {
+        roundCloseStatus: 'rejected',
+        rejectionReason: 'INCOMPLETE_VOTES',
+      };
+    }
+
+    const summaryMatchesVotes = this.matchesAcceptedVoteSummary(event.voteSummary, acceptedVotes);
+    if (!summaryMatchesVotes) {
+      return {
+        roundCloseStatus: 'rejected',
+        rejectionReason: 'INVALID_RESULT',
+      };
+    }
+
+    const resolvedOptionId = this.resolveAcceptedRoundOption(acceptedVotes);
+    if (!resolvedOptionId || resolvedOptionId !== event.resolvedOptionId) {
+      return {
+        roundCloseStatus: 'rejected',
+        rejectionReason: 'INVALID_RESULT',
+      };
+    }
+
+    this.closedRounds.add(event.roundId);
+    delete this.acceptedVotesByRound[event.roundId];
+    return {
+      roundCloseStatus: 'accepted',
+    };
+  }
+
+  private matchesAcceptedVoteSummary(
+    voteSummary: RoundClosedEvent['voteSummary'],
+    acceptedVotes: VoteCastEvent[]
+  ): boolean {
+    if (voteSummary.length !== acceptedVotes.length) {
+      return false;
+    }
+
+    const expectedSummary = acceptedVotes
+      .map((vote) => ({
+        roleId: vote.roleId,
+        optionId: vote.optionId,
+        playerId: vote.playerId,
+      }))
+      .sort(compareVoteSummaryEntry);
+
+    const actualSummary = [...voteSummary].sort(compareVoteSummaryEntry);
+
+    return expectedSummary.every((expected, index) => {
+      const actual = actualSummary[index];
+      return Boolean(actual)
+        && actual.roleId === expected.roleId
+        && actual.optionId === expected.optionId
+        && actual.playerId === expected.playerId;
+    });
+  }
+
+  private resolveAcceptedRoundOption(acceptedVotes: VoteCastEvent[]): string | null {
+    const voteCounts = new Map<string, number>();
+    for (const vote of acceptedVotes) {
+      voteCounts.set(vote.optionId, (voteCounts.get(vote.optionId) ?? 0) + 1);
+    }
+
+    const maxVotes = Math.max(...voteCounts.values());
+    const winningOptions = [...voteCounts.entries()]
+      .filter(([, count]) => count === maxVotes)
+      .map(([optionId]) => optionId);
+
+    return winningOptions.length === 1 ? winningOptions[0] : null;
+  }
+}
+
+function compareVoteSummaryEntry(
+  left: { roleId: string; optionId: string; playerId: string },
+  right: { roleId: string; optionId: string; playerId: string }
+): number {
+  const leftKey = `${left.roleId}:${left.playerId}:${left.optionId}`;
+  const rightKey = `${right.roleId}:${right.playerId}:${right.optionId}`;
+  return leftKey.localeCompare(rightKey);
 }

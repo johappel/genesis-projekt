@@ -83,6 +83,12 @@ Fachspezifisch je nach Event zusaetzlich:
 - `optionId`
 - `actorPubkey`
 
+## Relay-Kompatibilitaet
+
+- Das Transport-Layer nutzt fuer Relay-Nachrichten einen ephemeren Nostr-Kind, der von einer Standard-Relay-Konfiguration akzeptiert wird.
+- Fuer die aktuelle Implementierung ist das Kind `20000`, weil das lokale Test-Relay diesen Kind akzeptiert, waehrend frei gewaehlte Custom-Kinds wie `24444` dort blockiert werden.
+- Die fachliche Unterscheidung der Multiplayer-Nachrichten erfolgt zusaetzlich ueber `eventName`, `gameId`, `roundId` und die Transport-Tags.
+
 ## Validierungsregeln
 
 Eingehende Events duerfen nie blind uebernommen werden.

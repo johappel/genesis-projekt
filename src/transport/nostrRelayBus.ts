@@ -6,7 +6,7 @@ import type { Filter } from 'nostr-tools/filter';
 import type { TransportEvent, TransportMessageBus } from './types.js';
 import type { EphemeralTransportSession } from './session.js';
 
-export const GENESIS_TRANSPORT_KIND = 24444;
+export const GENESIS_TRANSPORT_KIND = 20000;
 
 export interface NostrRelayBusOptions {
   relayUrls: string[];
