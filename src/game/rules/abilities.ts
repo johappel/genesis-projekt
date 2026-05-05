@@ -65,13 +65,14 @@ export function activateAbility(state: GameState): AbilityResult {
   }
 
   if (roleId === 'juristin') {
-    let next = markGlobalUsed(state, 'juristin');
+    let next = applyEffect(state, { gerechtigkeit: 1 });
+    next = markGlobalUsed(next, 'juristin');
     next = { ...next, abilities: { ...next.abilities, juristinShieldActive: true } };
     return {
       ok: true,
       state: next,
       effectDescription:
-        '⚖️ Regulierungs-Schutz aktiviert: Der nächste negative Friedenseffekt zählt nicht.',
+        '⚖️ Regulierungs-Schutz aktiviert: +Gerechtigkeit; der nächste negative Friedenseffekt zählt nicht.',
     };
   }
 

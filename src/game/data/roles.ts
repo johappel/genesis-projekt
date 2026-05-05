@@ -23,7 +23,7 @@ export const ROLES: Role[] = [
     icon: '⚖️',
     name: 'Jurist:in / Politiker:in',
     perspective: 'Rechte, Haftung, Regulierung, Gemeinwohl',
-    abilityDescription: 'Sonderfähigkeit: Regulierungsoptionen kosten einmalig keinen Friedenspunkt.',
+    abilityDescription: 'Sonderfähigkeit: Gibt einmalig +1 Gerechtigkeit; zusätzlich kostet die nächste Regulierungsoption keinen Friedenspunkt.',
     desc: 'Du denkst in Gesetzen und Rechten. Du weißt: Ohne Regulierung gibt es keine Verantwortung.',
   },
   {
