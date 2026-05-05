@@ -15,12 +15,17 @@ export function assignRole(state: GameState, roleId: string): RoleResult {
   if (!role) {
     return { ok: false, error: 'ROLE_NOT_FOUND' };
   }
-  // In Single-Device-Modus: dieselbe Rolle kann nicht zweimal übernommen werden
-  if (state.selectedRole?.id === roleId) {
+  if (state.activeRoles.some((activeRole) => activeRole.id === roleId)) {
     return { ok: false, error: 'ROLE_ALREADY_TAKEN' };
   }
+
+  const nextActiveRoles = [...state.activeRoles, role];
   return {
     ok: true,
-    state: { ...state, selectedRole: role },
+    state: {
+      ...state,
+      activeRoles: nextActiveRoles,
+      selectedRole: role,
+    },
   };
 }

@@ -9,6 +9,7 @@ describe('assignRole()', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.state.selectedRole?.id).toBe('theologin');
+      expect(result.state.activeRoles.map((role) => role.id)).toEqual(['theologin']);
     }
   });
 
@@ -43,6 +44,10 @@ describe('assignRole()', () => {
       expect(second.ok).toBe(true);
       if (second.ok) {
         expect(second.state.selectedRole?.id).toBe('entwicklerin');
+        expect(second.state.activeRoles.map((role) => role.id)).toEqual([
+          'theologin',
+          'entwicklerin',
+        ]);
       }
     }
   });

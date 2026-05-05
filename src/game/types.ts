@@ -103,8 +103,8 @@ export interface FactNote {
 // -------- Spielzustand --------
 
 export interface AbilityState {
-  usedGlobal: boolean;
-  usedCases: Record<string, boolean>;
+  usedGlobalByRole: Record<string, boolean>;
+  usedCaseAbilities: Record<string, boolean>;
   juristinShieldActive: boolean;
   buergerinForecastActive: boolean;
   prophetinVetoActive: boolean;
@@ -121,9 +121,14 @@ export interface ProtocolEntry {
 export interface GameState {
   currentCase: number;
   selectedRole: Role | null;
+  activeRoles: Role[];
+  currentRoleIndex: number;
   selectedLens: Lens | null;
   values: Record<GameValueKey, number>;
   macht: number;
+  roundVotes: Record<string, string>;
+  councilPreVoteOptionId: string | null;
+  tieBreakOptions: string[] | null;
   abilities: AbilityState;
   protokoll: ProtocolEntry[];
   linsenUsed: Record<string, number>;

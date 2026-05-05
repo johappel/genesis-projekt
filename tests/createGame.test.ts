@@ -7,6 +7,10 @@ describe('createGame()', () => {
     const state = createGame();
     expect(state.currentCase).toBe(0);
     expect(state.selectedRole).toBeNull();
+    expect(state.activeRoles).toEqual([]);
+    expect(state.roundVotes).toEqual({});
+    expect(state.councilPreVoteOptionId).toBeNull();
+    expect(state.tieBreakOptions).toBeNull();
     expect(state.selectedLens).toBeNull();
   });
 

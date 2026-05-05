@@ -14,14 +14,14 @@ export function activateAbility(state: GameState): AbilityResult {
     return { ok: false, error: 'NO_ROLE' };
   }
   const roleId = state.selectedRole.id;
-  const caseKey = `case-${state.currentCase}`;
+  const caseKey = `case-${state.currentCase}-${roleId}`;
 
   if (roleId === 'sozialarbeiterin') {
     return { ok: false, error: 'PASSIVE_ONLY' };
   }
 
   if (roleId === 'theologin') {
-    if (state.abilities.usedCases[caseKey]) {
+    if (state.abilities.usedCaseAbilities[caseKey]) {
       return { ok: false, error: 'ABILITY_ALREADY_USED' };
     }
     const effect: BalanceEffect = { gerechtigkeit: 1, autonomie: 1, macht: -1 };
@@ -30,7 +30,7 @@ export function activateAbility(state: GameState): AbilityResult {
       ...next,
       abilities: {
         ...next.abilities,
-        usedCases: { ...next.abilities.usedCases, [caseKey]: true },
+        usedCaseAbilities: { ...next.abilities.usedCaseAbilities, [caseKey]: true },
         activatedCount: {
           ...next.abilities.activatedCount,
           theologin: next.abilities.activatedCount['theologin'] + 1,
@@ -49,7 +49,7 @@ export function activateAbility(state: GameState): AbilityResult {
     };
   }
 
-  if (state.abilities.usedGlobal) {
+  if (state.abilities.usedGlobalByRole[roleId]) {
     return { ok: false, error: 'ABILITY_ALREADY_USED' };
   }
 
@@ -106,7 +106,10 @@ function markGlobalUsed(state: GameState, roleId: string): GameState {
     ...state,
     abilities: {
       ...state.abilities,
-      usedGlobal: true,
+      usedGlobalByRole: {
+        ...state.abilities.usedGlobalByRole,
+        [roleId]: true,
+      },
       activatedCount: {
         ...state.abilities.activatedCount,
         [roleId]: (state.abilities.activatedCount[roleId] ?? 0) + 1,
@@ -121,8 +124,8 @@ export function isAbilityAvailable(state: GameState): boolean {
   const roleId = state.selectedRole.id;
   if (roleId === 'sozialarbeiterin') return false;
   if (roleId === 'theologin') {
-    const caseKey = `case-${state.currentCase}`;
-    return !state.abilities.usedCases[caseKey];
+    const caseKey = `case-${state.currentCase}-${roleId}`;
+    return !state.abilities.usedCaseAbilities[caseKey];
   }
-  return !state.abilities.usedGlobal;
+  return !state.abilities.usedGlobalByRole[roleId];
 }

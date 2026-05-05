@@ -127,15 +127,15 @@
     <div id="screen-roles" class="screen">
       <div class="max-900" style="padding:20px">
         <div class="text-center mb-20">
-          <h2 class="roles-title">👥 Wähle deine Rolle</h2>
-          <p style="color:var(--text-dim)">Du bist Mitglied des Ethikrats. Deine Rolle bestimmt, welche besonderen Fähigkeiten du einsetzen kannst.</p>
+          <h2 class="roles-title">👥 Wählt eure Rollen</h2>
+          <p style="color:var(--text-dim)">Vergibt die Ratsrollen einmalig. Mindestens zwei Rollen muessen aktiv sein, bevor die gemeinsame Runde startet.</p>
         </div>
         <div class="roles-grid" id="roles-grid"></div>
         <div class="text-center">
           <button class="btn btn-primary" id="btn-start-game" onclick="startGame()" style="padding:14px 32px" disabled>
             🎮 Spiel starten
           </button>
-          <p id="role-hint" style="margin-top:10px;color:var(--text-dim);font-size:0.88em">Wähle eine Rolle, um zu beginnen.</p>
+          <p id="role-hint" style="margin-top:10px;color:var(--text-dim);font-size:0.88em">Waehlt mindestens zwei Rollen fuer die Runde.</p>
         </div>
       </div>
     </div>
@@ -174,7 +174,7 @@
         <div class="scenario-panel" id="scenario-panel"></div>
         <div class="sidebar">
           <div class="sidebar-panel">
-            <div class="sidebar-title">👤 Deine Rolle</div>
+            <div class="sidebar-title">👤 Aktuelle Runde</div>
             <div id="sidebar-role"></div>
           </div>
           <div class="sidebar-panel">
@@ -298,7 +298,7 @@
         <div class="value-changes" id="consequence-changes"></div>
         <div class="consequence-text" id="consequence-text"></div>
         <div class="reflexion-box" id="consequence-reflexion"></div>
-        <button class="btn btn-primary" onclick="closeConsequence()" style="padding:11px 28px">Weiter →</button>
+        <button class="btn btn-primary" onclick="closeConsequence()" style="padding:11px 28px">OK</button>
       </div>
     </div>
 

@@ -8,7 +8,14 @@ import { VALUE_LABELS, DECISION_TIMER_SECONDS, MACHT_WARN_THRESHOLD, MACHT_CRITI
 import { UI_TEXT } from './game/data/uiText.js';
 import { createGame } from './game/engine/createGame.js';
 import { assignRole } from './game/engine/roles.js';
-import { castVote } from './game/engine/voting.js';
+import {
+  advanceToNextRole,
+  beginTieBreak,
+  castVote,
+  determineRoundDecision,
+  haveAllActiveRolesVoted,
+  resetRoundVotingState,
+} from './game/engine/voting.js';
 import { closeRound, getSystemicRiskWarning, getEmergencyEndingBadge, getAppliedRoundEffect } from './game/engine/rounds.js';
 import { activateAbility, isAbilityAvailable } from './game/rules/abilities.js';
 
@@ -18,10 +25,12 @@ import { activateAbility, isAbilityAvailable } from './game/rules/abilities.js';
 let state: GameState = createGame();
 let pendingDecision: DecisionOption | null = null;
 let pendingSystemicNotes: string[] = [];
+let pendingOverlayAction: 'none' | 'render-case' | 'apply-round' | 'advance-after-round' = 'none';
 const DEVELOPER_MODE = new URLSearchParams(window.location.search).has('dev');
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let timerRemaining = DECISION_TIMER_SECONDS;
+let timedCaseIndex: number | null = null;
 
 function formatEffectTags(effect: Record<string, number>, kind: 'decision' | 'overlay'): string {
   return Object.entries(effect)
@@ -99,6 +108,110 @@ function showScreen(id: string): void {
   window.scrollTo(0, 0);
 }
 
+function getAvailableDecisions(caseData: typeof CASES[0]): DecisionOption[] {
+  if (!state.tieBreakOptions) {
+    return caseData.decisions;
+  }
+
+  const tieBreakIds = new Set(state.tieBreakOptions);
+  return caseData.decisions.filter((decision) => tieBreakIds.has(decision.id));
+}
+
+function getCurrentRoundVoteCount(): number {
+  return Object.keys(state.roundVotes).length;
+}
+
+function ensureCouncilPreVote(): void {
+  const caseData = CASES[state.currentCase];
+  if (!caseData) return;
+
+  const availableDecisions = getAvailableDecisions(caseData);
+  const availableOptionIds = availableDecisions.map((decision) => decision.id);
+
+  if (
+    state.councilPreVoteOptionId &&
+    availableOptionIds.includes(state.councilPreVoteOptionId)
+  ) {
+    return;
+  }
+
+  const randomIndex = Math.floor(Math.random() * availableDecisions.length);
+  const chosenDecision = availableDecisions[randomIndex] ?? null;
+  state = {
+    ...state,
+    councilPreVoteOptionId: chosenDecision?.id ?? null,
+  };
+}
+
+function getCurrentCouncilPreVote(): DecisionOption | null {
+  const caseData = CASES[state.currentCase];
+  if (!caseData || !state.councilPreVoteOptionId) {
+    return null;
+  }
+
+  return getAvailableDecisions(caseData).find(
+    (decision) => decision.id === state.councilPreVoteOptionId
+  ) ?? null;
+}
+
+function getRoleSelectionHint(): string {
+  if (!state.activeRoles.length) {
+    return 'Waehle mindestens zwei Rollen fuer eine gemeinsame Ratsrunde.';
+  }
+
+  const names = state.activeRoles.map((role) => role.name).join(', ');
+  const suffix = state.activeRoles.length < 2
+    ? ' Noch eine Rolle fehlt zum Start.'
+    : ' Runde bereit.';
+  return `${state.activeRoles.length} Rollen aktiv: ${names}.${suffix}`;
+}
+
+function updateRoleSelectionUI(): void {
+  document.querySelectorAll<HTMLElement>('.role-select-card').forEach((card) => {
+    const isSelected = state.activeRoles.some((role) => card.id === `role-card-${role.id}`);
+    card.classList.toggle('selected', isSelected);
+    card.setAttribute('aria-pressed', String(isSelected));
+  });
+
+  const btn = document.getElementById('btn-start-game') as HTMLButtonElement | null;
+  const hint = document.getElementById('role-hint');
+  if (btn) btn.disabled = state.activeRoles.length < 2;
+  if (hint) hint.textContent = getRoleSelectionHint();
+}
+
+function showCurrentTurnPrompt(details?: string): void {
+  clearTimer();
+  ensureCouncilPreVote();
+
+  const overlay = document.getElementById('consequence-overlay');
+  const icon = document.getElementById('consequence-icon');
+  const title = document.getElementById('consequence-title');
+  const text = document.getElementById('consequence-text');
+  const reflexion = document.getElementById('consequence-reflexion');
+  const changesEl = document.getElementById('consequence-changes');
+  if (!overlay || !icon || !title || !text || !reflexion || !changesEl) return;
+
+  const councilPreVote = getCurrentCouncilPreVote();
+  const preVoteText = councilPreVote
+    ? `Der Rat würde vorläufig für „${councilPreVote.text}“ stimmen, sofern ihr das nicht überstimmt.`
+    : '';
+
+  icon.textContent = state.selectedRole?.icon ?? '👤';
+  title.textContent = state.selectedRole?.name ?? 'Naechste Rolle';
+  text.textContent = 'Du bist am Zug.';
+  reflexion.textContent = [
+    details ?? 'Lest den Fall gemeinsam und gebt das Geraet erst nach deiner Stimmabgabe weiter.',
+    preVoteText,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  changesEl.innerHTML = `${state.tieBreakOptions
+    ? '<span class="value-change-item change-shift">Stichwahl</span>'
+    : `<span class="value-change-item change-shift">Stimme ${getCurrentRoundVoteCount() + 1} von ${state.activeRoles.length}</span>`}${councilPreVote ? '<span class="value-change-item change-shift">KI-Fallback aktiv</span>' : ''}`;
+  pendingOverlayAction = 'render-case';
+  overlay.classList.remove('hidden');
+}
+
 // ============================================================
 // ROLLEN-SCREEN
 // ============================================================
@@ -122,29 +235,30 @@ function initRolesScreen(): void {
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') selectRole(role.id); });
     grid.appendChild(card);
   });
+
+  updateRoleSelectionUI();
 }
 
 function selectRole(roleId: string): void {
   const result = assignRole(state, roleId);
   if (!result.ok) return;
   state = result.state;
-
-  document.querySelectorAll('.role-select-card').forEach((c) => c.classList.remove('selected'));
-  document.getElementById(`role-card-${roleId}`)?.classList.add('selected');
-
-  const btn = document.getElementById('btn-start-game') as HTMLButtonElement | null;
-  const hint = document.getElementById('role-hint');
-  if (btn) btn.disabled = false;
-  if (hint) hint.textContent = `Rolle gewählt: ${state.selectedRole?.name}`;
+  updateRoleSelectionUI();
 }
 
 // ============================================================
 // SPIELSTART
 // ============================================================
 function startGame(): void {
-  if (!state.selectedRole) return;
+  if (state.activeRoles.length < 2) return;
+  state = resetRoundVotingState({
+    ...state,
+    selectedRole: state.activeRoles[0] ?? null,
+    currentRoleIndex: 0,
+    selectedLens: null,
+  });
   showScreen('screen-game');
-  renderCase();
+  showCurrentTurnPrompt('Die erste Ratsstimme beginnt jetzt. Nach OK wird der aktuelle Fall eingeblendet.');
 }
 
 // ============================================================
@@ -162,8 +276,12 @@ function renderCase(): void {
   const phaseEl = document.getElementById('phase-indicator');
   const roleDisp = document.getElementById('current-role-display');
   const progressFill = document.getElementById('progress-fill');
+  const voteCount = getCurrentRoundVoteCount();
+  const tieBreakLabel = state.tieBreakOptions ? ' · Stichwahl' : '';
   if (phaseEl) phaseEl.textContent = `Fall ${state.currentCase + 1} von ${CASES.length}`;
-  if (roleDisp) roleDisp.textContent = `Rolle: ${state.selectedRole?.name ?? '–'}${DEVELOPER_MODE ? ' · DEV' : ''}`;
+  if (roleDisp) {
+    roleDisp.textContent = `Am Zug: ${state.selectedRole?.name ?? '–'} · ${voteCount}/${state.activeRoles.length} Stimmen${tieBreakLabel}${DEVELOPER_MODE ? ' · DEV' : ''}`;
+  }
   if (progressFill) progressFill.style.width = `${(state.currentCase / CASES.length) * 100}%`;
 
   updateValuesDisplay();
@@ -194,12 +312,19 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   if (!panel) return;
 
   const activeLens: Lens | null = state.selectedLens;
+  const availableDecisions = getAvailableDecisions(caseData);
+  const voteCount = getCurrentRoundVoteCount();
+  const modeLabel = state.tieBreakOptions ? 'Stichwahl' : 'Ratsrunde';
 
   panel.innerHTML = `
     <div class="scenario-tag ${caseData.tagClass}">${caseData.tag}</div>
     <div class="scenario-ki-badge">${caseData.kiIcon} ${caseData.ki}</div>
     <div class="scenario-title">${caseData.title}</div>
     <div class="scenario-text">${caseData.situation}</div>
+    <div class="round-status">
+      <div class="round-status-title">${modeLabel}</div>
+      <div class="round-status-text"><strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.</div>
+    </div>
     <div class="scenario-problem">
       <div class="scenario-problem-title">Das Problem</div>
       ${caseData.problem}
@@ -219,7 +344,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
 
     <div>
       <div class="panel-title">⚡ Entscheidung treffen</div>
-      <div class="decision-guidance">${DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Was stärkt etwas, was belastet etwas, was gibt KI mehr Rechte oder nimmt ihr Bedeutung?'}</div>
+      <div class="decision-guidance">${DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Die Runde bleibt verdeckt, bis alle aktiven Rollen abgestimmt haben.'}</div>
       <div id="decision-timer-box" class="decision-timer">
         <div class="timer-label">
           <span>Beratungszeit</span>
@@ -229,7 +354,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
         <div id="timer-note" style="margin-top:5px;font-size:0.8em;color:var(--text-dim);">${UI_TEXT.decisionTimerNote}</div>
       </div>
 
-      ${caseData.decisions
+      ${availableDecisions
         .map((d) => {
           const tags = formatEffectTags(getAppliedRoundEffect(d.effects) as Record<string, number>, 'decision');
           return `
@@ -293,21 +418,45 @@ function selectLens(lensId: string, caseData: typeof CASES[0]): void {
 function handleDecision(optionId: string): void {
   const caseData = CASES[state.currentCase];
   if (!caseData) return;
-  const option = caseData.decisions.find((d) => d.id === optionId);
+  const availableDecisions = getAvailableDecisions(caseData);
+  const option = availableDecisions.find((d) => d.id === optionId);
   if (!option) return;
 
   // Prophetisches Veto prüfen
   if (state.abilities.prophetinVetoActive) {
+    clearTimer();
     state = { ...state, abilities: { ...state.abilities, prophetinVetoActive: false } };
     showVetoNotice();
     return;
   }
 
-  pendingDecision = option;
+  const optionIds = availableDecisions.map((decision) => decision.id);
+  const voteResult = castVote(state, state.currentCase + 1, option.id, optionIds);
+  if (!voteResult.ok) return;
+
+  const votedRoleName = state.selectedRole?.name ?? 'Unbekannte Rolle';
+  state = voteResult.state;
   clearTimer();
 
-  // Konsequenz anzeigen
-  showConsequence(option, caseData);
+  if (!haveAllActiveRolesVoted(state)) {
+    state = advanceToNextRole(state);
+    showHandoverNotice(votedRoleName, state.selectedRole?.name ?? 'naechste Rolle');
+    return;
+  }
+
+  const roundDecision = determineRoundDecision(state, optionIds);
+  if (!roundDecision) return;
+
+  if (roundDecision.status === 'tie-break') {
+    state = beginTieBreak(state, roundDecision.optionIds);
+    showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
+    return;
+  }
+
+  pendingDecision = caseData.decisions.find((decision) => decision.id === roundDecision.optionId) ?? null;
+  if (!pendingDecision) return;
+
+  showConsequence(pendingDecision, roundDecision.voteCount);
 }
 
 function showVetoNotice(): void {
@@ -322,12 +471,33 @@ function showVetoNotice(): void {
   icon.textContent = '🔥';
   title.textContent = 'Prophetisches Veto!';
   changes.innerHTML = '';
-  text.textContent = 'Die prophetische Stimme hat die Entscheidung gestoppt. Beratet neu!';
-  reflexion.textContent = 'Welche Risiken habt ihr noch nicht bedacht?';
+  text.textContent = 'Die prophetische Stimme hat die Entscheidung gestoppt. Beratet neu.';
+  reflexion.textContent = `${state.selectedRole?.name ?? 'Die aktuelle Rolle'} bleibt am Zug. Welche Risiken habt ihr noch nicht bedacht?`;
+  pendingOverlayAction = 'render-case';
   overlay.classList.remove('hidden');
 }
 
-function showConsequence(option: DecisionOption, _caseData: typeof CASES[0]): void {
+function showHandoverNotice(votedRoleName: string, nextRoleName: string): void {
+  showCurrentTurnPrompt(`${votedRoleName} hat abgestimmt. Bitte gebt das Geraet jetzt an ${nextRoleName} weiter.`);
+}
+
+function showTieBreakNotice(
+  caseData: typeof CASES[0],
+  optionIds: string[],
+  voteCount: number
+): void {
+  const optionLabels = optionIds
+    .map((optionId) => caseData.decisions.find((decision) => decision.id === optionId)?.text)
+    .filter((label): label is string => Boolean(label));
+
+  const detailText = optionLabels.length
+    ? `Gleichstand mit ${voteCount} Stimme(n). In der Stichwahl bleiben nur noch diese Optionen: ${optionLabels.join(' / ')}.`
+    : `Gleichstand mit ${voteCount} Stimme(n). Jetzt folgt eine Stichwahl.`;
+  showCurrentTurnPrompt(detailText);
+}
+
+function showConsequence(option: DecisionOption, voteCount: number): void {
+  clearTimer();
   const overlay = document.getElementById('consequence-overlay');
   const icon = document.getElementById('consequence-icon');
   const title = document.getElementById('consequence-title');
@@ -336,17 +506,47 @@ function showConsequence(option: DecisionOption, _caseData: typeof CASES[0]): vo
   const changesEl = document.getElementById('consequence-changes');
   if (!overlay || !icon || !title || !text || !reflexion || !changesEl) return;
 
+  const councilPreVote = getCurrentCouncilPreVote();
+  const preVoteOutcome = councilPreVote
+    ? option.id === councilPreVote.id
+      ? ` Das sichtbare KI-Vorvotum für „${councilPreVote.text}“ wurde bestätigt.`
+      : ` Das sichtbare KI-Vorvotum für „${councilPreVote.text}“ wurde überstimmt.`
+    : '';
+
   icon.textContent = option.iconResult;
-  title.textContent = option.text;
-  text.textContent = option.consequence;
-  reflexion.textContent = option.reflexion;
+  title.textContent = 'Kurze Rundenzusammenfassung';
+  text.textContent = `Entschieden wurde: ${option.text}. Dafür stimmten ${voteCount} von ${state.activeRoles.length} aktiven Rollen.${preVoteOutcome}`;
+  reflexion.textContent = option.consequence;
 
   changesEl.innerHTML = formatEffectTags(getAppliedRoundEffect(option.effects) as Record<string, number>, 'overlay');
 
+  pendingOverlayAction = 'apply-round';
+  overlay.classList.remove('hidden');
+}
+
+function showTimeoutDecision(option: DecisionOption): void {
+  clearTimer();
+  const overlay = document.getElementById('consequence-overlay');
+  const icon = document.getElementById('consequence-icon');
+  const title = document.getElementById('consequence-title');
+  const text = document.getElementById('consequence-text');
+  const reflexion = document.getElementById('consequence-reflexion');
+  const changesEl = document.getElementById('consequence-changes');
+  if (!overlay || !icon || !title || !text || !reflexion || !changesEl) return;
+
+  icon.textContent = '⏳';
+  title.textContent = 'Frist abgelaufen';
+  text.textContent = `Der Klärungsprozess dieser Runde wurde nicht rechtzeitig abgeschlossen. Die KI setzt deshalb die vorläufige Linie um: ${option.text}.`;
+  reflexion.textContent = option.consequence;
+  changesEl.innerHTML = formatEffectTags(getAppliedRoundEffect(option.effects) as Record<string, number>, 'overlay');
+
+  pendingDecision = option;
+  pendingOverlayAction = 'apply-round';
   overlay.classList.remove('hidden');
 }
 
 function showSystemicConsequences(notes: string[]): void {
+  clearTimer();
   const overlay = document.getElementById('consequence-overlay');
   const icon = document.getElementById('consequence-icon');
   const title = document.getElementById('consequence-title');
@@ -360,6 +560,7 @@ function showSystemicConsequences(notes: string[]): void {
   text.innerHTML = notes.map((note) => `<div style="margin-bottom:8px">${note}</div>`).join('');
   reflexion.textContent = 'Die Folgen zeigen sich nicht nur im Einzelfall, sondern im gesamten Gefüge der Stadt.';
   changesEl.innerHTML = '<span class="value-change-item change-shift">Stadtweite Folgeeffekte aktiviert</span>';
+  pendingOverlayAction = 'advance-after-round';
   overlay.classList.remove('hidden');
 }
 
@@ -379,28 +580,30 @@ function advanceAfterRound(): void {
     return;
   }
 
-  renderCase();
+  showCurrentTurnPrompt('Die naechste Ratsrunde beginnt. Nach OK wird der neue Fall eingeblendet.');
 }
 
 function closeConsequence(): void {
   document.getElementById('consequence-overlay')?.classList.add('hidden');
+  if (pendingOverlayAction === 'render-case') {
+    pendingOverlayAction = 'none';
+    renderCase();
+    return;
+  }
+
   if (pendingSystemicNotes.length > 0) {
     pendingSystemicNotes = [];
+    pendingOverlayAction = 'none';
     advanceAfterRound();
     return;
   }
-  if (!pendingDecision) return;
+  if (pendingOverlayAction !== 'apply-round' || !pendingDecision) return;
 
   const option = pendingDecision;
   pendingDecision = null;
+  pendingOverlayAction = 'none';
 
   const lensName = state.selectedLens?.name ?? '–';
-
-  // Stimme registrieren (ohne sofortige Effekte)
-  if (state.selectedRole) {
-    const optionIds = CASES[state.currentCase]?.decisions.map((d) => d.id) ?? [];
-    castVote(state, state.currentCase + 1, option.id, optionIds);
-  }
 
   // Effekte über Runden-Abschluss anwenden
   let modifiedEffect = { ...option.effects };
@@ -423,7 +626,10 @@ function closeConsequence(): void {
   const result = closeRound(state, modifiedEffect, option.text, lensName);
   if (!result.ok) return;
 
-  state = result.state;
+  state = resetRoundVotingState({
+    ...result.state,
+    selectedLens: null,
+  });
 
   if (result.systemicNotes.length > 0) {
     pendingSystemicNotes = result.systemicNotes;
@@ -439,7 +645,12 @@ function closeConsequence(): void {
 // ============================================================
 function startDecisionTimer(caseData: typeof CASES[0]): void {
   clearTimer();
-  timerRemaining = DECISION_TIMER_SECONDS;
+
+  if (timedCaseIndex !== state.currentCase) {
+    timedCaseIndex = state.currentCase;
+    timerRemaining = DECISION_TIMER_SECONDS;
+  }
+
   updateTimerDisplay();
 
   timerInterval = setInterval(() => {
@@ -478,15 +689,10 @@ function updateTimerDisplay(): void {
 }
 
 function autoDecide(caseData: typeof CASES[0]): void {
-  if (!caseData.decisions.length) return;
-  const option: DecisionOption = {
-    ...caseData.decisions[0],
-    consequence: `⚡ AUTOMATISCH UMGESETZT: Der Ethikrat hat nicht rechtzeitig entschieden. ${caseData.decisions[0].consequence}`,
-    reflexion: `Das Schweigen wurde als Zustimmung gewertet. ${caseData.decisions[0].reflexion}`,
-    iconResult: '⚡',
-  };
-  pendingDecision = option;
-  showConsequence(option, caseData);
+  ensureCouncilPreVote();
+  const fallbackDecision = getCurrentCouncilPreVote() ?? getAvailableDecisions(caseData)[0] ?? null;
+  if (!fallbackDecision) return;
+  showTimeoutDecision(fallbackDecision);
 }
 
 // ============================================================
@@ -579,7 +785,33 @@ function updateProtocol(): void {
 
 function updateSidebar(): void {
   const el = document.getElementById('sidebar-role');
-  if (!el || !state.selectedRole) return;
+  if (!el) return;
+
+  const roleRoster = state.activeRoles
+    .map((role) => {
+      const status = state.roundVotes[role.id]
+        ? 'hat abgestimmt'
+        : role.id === state.selectedRole?.id
+          ? 'ist am Zug'
+          : 'wartet';
+      const statusClass = state.roundVotes[role.id]
+        ? 'voted'
+        : role.id === state.selectedRole?.id
+          ? 'current'
+          : 'waiting';
+      return `
+        <div class="role-roster-item ${statusClass}">
+          <span>${role.icon} ${role.name}</span>
+          <span>${status}</span>
+        </div>`;
+    })
+    .join('');
+
+  if (!state.selectedRole) {
+    el.innerHTML = `<div class="role-roster">${roleRoster}</div>`;
+    return;
+  }
+
   const role = state.selectedRole;
   const abilityAvail = isAbilityAvailable(state);
 
@@ -587,7 +819,9 @@ function updateSidebar(): void {
     <div style="font-size:1.8em">${role.icon}</div>
     <div style="font-weight:bold;color:var(--gold);margin:6px 0">${role.name}</div>
     <div style="font-size:0.8em;color:var(--text-dim);margin-bottom:8px">${role.perspective}</div>
+    <div style="font-size:0.76em;color:var(--text-dim);margin-bottom:10px">Stimmen in dieser Runde: ${getCurrentRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}</div>
     ${renderAbilityControl(abilityAvail)}
+    <div class="role-roster">${roleRoster}</div>
   `;
 }
 
@@ -824,7 +1058,11 @@ function showEmergencyEnding(badge: string): void {
 function resetGame(): void {
   state = createGame();
   clearTimer();
+  timerRemaining = DECISION_TIMER_SECONDS;
+  timedCaseIndex = null;
   pendingDecision = null;
+  pendingSystemicNotes = [];
+  pendingOverlayAction = 'none';
   showScreen('screen-start');
   initRolesScreen();
 }
