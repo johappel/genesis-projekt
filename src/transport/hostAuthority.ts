@@ -1,7 +1,14 @@
 import { TransportEventFactory } from './eventFactory.js';
 import { getNextPendingRole, haveAllActiveRolesVoted } from '../game/engine/voting.js';
 import type { EphemeralTransportSession } from './session.js';
-import type { RoleClaimedEvent, RoundClosedEvent, StateSnapshot, TransportMessageBus, VoteCastEvent } from './types.js';
+import type {
+  PendingRoundCloseState,
+  RoleClaimedEvent,
+  RoundClosedEvent,
+  StateSnapshot,
+  TransportMessageBus,
+  VoteCastEvent,
+} from './types.js';
 
 export interface HostAuthorityOptions {
   bus: TransportMessageBus;
@@ -34,6 +41,8 @@ export class HostAuthority {
   private readonly acceptedRoleOwners: Record<string, string> = {};
 
   private readonly acceptedVotesByPhase: Record<string, Record<string, VoteCastEvent>> = {};
+
+  private readonly acceptedRoundCloses: Record<string, PendingRoundCloseState> = {};
 
   private readonly closedRounds = new Set<string>();
 
@@ -138,6 +147,7 @@ export class HostAuthority {
         ...snapshot.roleOwners,
         ...this.acceptedRoleOwners,
       },
+      pendingRoundClose: this.acceptedRoundCloses[currentRoundId] ?? null,
     };
   }
 
@@ -324,6 +334,12 @@ export class HostAuthority {
     }
 
     this.closedRounds.add(event.roundId);
+    this.acceptedRoundCloses[event.roundId] = {
+      roundId: event.roundId,
+      caseId: event.caseId,
+      resolvedOptionId: event.resolvedOptionId,
+      voteSummary: event.voteSummary,
+    };
     delete this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, false)];
     delete this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, true)];
     return {

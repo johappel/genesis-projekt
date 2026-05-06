@@ -6,7 +6,10 @@ import type { Filter } from 'nostr-tools/filter';
 import type { TransportEvent, TransportMessageBus } from './types.js';
 import type { EphemeralTransportSession } from './session.js';
 
-export const GENESIS_TRANSPORT_KIND = 20000;
+export const GENESIS_TRANSPORT_KIND = 1;
+
+const PUBLISH_RETRY_ATTEMPTS = 4;
+const PUBLISH_RETRY_DELAY_MS = 120;
 
 export interface NostrRelayBusOptions {
   relayUrls: string[];
@@ -65,7 +68,23 @@ export class NostrRelayBus implements TransportMessageBus {
     };
 
     const signedEvent = finalizeEvent(template, this.options.session.secretKey);
-    await Promise.any(this.pool.publish(this.relayUrls, signedEvent));
+
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < PUBLISH_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        await Promise.any(this.pool.publish(this.relayUrls, signedEvent));
+        return;
+      } catch (error: unknown) {
+        lastError = error;
+        if (attempt === PUBLISH_RETRY_ATTEMPTS - 1) {
+          throw error;
+        }
+
+        await delay(PUBLISH_RETRY_DELAY_MS);
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Relay-Publish fehlgeschlagen');
   }
 
   subscribe(gameId: string, onEvent: (event: TransportEvent) => void): () => void {
@@ -100,4 +119,10 @@ function parseTransportEvent(event: NostrEvent): TransportEvent | null {
   } catch {
     return null;
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

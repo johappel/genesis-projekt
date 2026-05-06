@@ -449,6 +449,23 @@ function applyAcceptedRoundClose(event: Extract<TransportEvent, { eventName: 'ro
   showConsequence(decision, getResolvedVoteCount(event.resolvedOptionId));
 }
 
+function restoreAcceptedRoundCloseFromSync(roundClose: {
+  resolvedOptionId: string;
+}): void {
+  const caseData = CASES[state.currentCase];
+  if (!caseData) {
+    return;
+  }
+
+  const decision = caseData.decisions.find((entry) => entry.id === roundClose.resolvedOptionId) ?? null;
+  if (!decision) {
+    return;
+  }
+
+  pendingDecision = decision;
+  showConsequence(decision, getResolvedVoteCount(roundClose.resolvedOptionId));
+}
+
 function handleMultiplayerTransportEvent(event: TransportEvent): void {
   if (event.eventName === 'game-created') {
     setMultiplayerStatus(`Relay-Raum ${event.gameId} aktiv. Rollen koennen jetzt online geclaimt werden.`);
@@ -462,13 +479,20 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
     syncRoleSelectionFromOwners();
     updateRoleFlowAfterTransport();
 
-    if (state.selectedRole && state.activeRoles.length >= 2) {
+    if (state.activeRoles.length >= 2) {
       showScreen('screen-game');
-      renderCase();
+      if (event.snapshot.pendingRoundClose) {
+        renderCase();
+        restoreAcceptedRoundCloseFromSync(event.snapshot.pendingRoundClose);
+      } else if (state.selectedRole) {
+        renderCase();
+      }
     }
 
     setMultiplayerStatus(
-      isCurrentRoleOwnedLocally()
+      event.snapshot.pendingRoundClose
+        ? 'State-Sync empfangen. Rundenabschluss wurde wiederhergestellt.'
+        : isCurrentRoleOwnedLocally()
         ? `State-Sync empfangen. Du bist jetzt am Zug.`
         : `State-Sync empfangen. Raum ${event.gameId} ist bereit.`
     );
@@ -589,6 +613,22 @@ function getAvailableDecisions(caseData: typeof CASES[0]): DecisionOption[] {
 
 function getCurrentRoundVoteCount(): number {
   return Object.keys(state.roundVotes).length;
+}
+
+function isRoundSummaryActive(): boolean {
+  return pendingOverlayAction === 'apply-round' && Boolean(pendingDecision);
+}
+
+function getDisplayedRoundVoteCount(): number {
+  return isRoundSummaryActive() ? state.activeRoles.length : getCurrentRoundVoteCount();
+}
+
+function getRoundStatusLabel(): string {
+  if (isRoundSummaryActive()) {
+    return `Runde abgeschlossen · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen`;
+  }
+
+  return `Am Zug: ${state.selectedRole?.name ?? '–'} · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen${state.tieBreakOptions ? ' · Stichwahl' : ''}${DEVELOPER_MODE ? ' · DEV' : ''}`;
 }
 
 function ensureCouncilPreVote(): void {
@@ -836,11 +876,9 @@ function renderCase(): void {
   const phaseEl = document.getElementById('phase-indicator');
   const roleDisp = document.getElementById('current-role-display');
   const progressFill = document.getElementById('progress-fill');
-  const voteCount = getCurrentRoundVoteCount();
-  const tieBreakLabel = state.tieBreakOptions ? ' · Stichwahl' : '';
   if (phaseEl) phaseEl.textContent = `Fall ${state.currentCase + 1} von ${CASES.length}`;
   if (roleDisp) {
-    roleDisp.textContent = `Am Zug: ${state.selectedRole?.name ?? '–'} · ${voteCount}/${state.activeRoles.length} Stimmen${tieBreakLabel}${DEVELOPER_MODE ? ' · DEV' : ''}`;
+    roleDisp.textContent = getRoundStatusLabel();
   }
   if (progressFill) progressFill.style.width = `${(state.currentCase / CASES.length) * 100}%`;
 
@@ -878,9 +916,16 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
 
   const activeLens: Lens | null = state.selectedLens;
   const availableDecisions = getAvailableDecisions(caseData);
-  const voteCount = getCurrentRoundVoteCount();
-  const modeLabel = state.tieBreakOptions ? 'Stichwahl' : 'Ratsrunde';
+  const voteCount = getDisplayedRoundVoteCount();
+  const modeLabel = isRoundSummaryActive()
+    ? 'Rundenabschluss'
+    : state.tieBreakOptions
+      ? 'Stichwahl'
+      : 'Ratsrunde';
   const canVoteHere = canVoteInCurrentClient();
+  const roundStatusText = isRoundSummaryActive()
+    ? `Die Runde wurde host-autoritativ abgeschlossen. Erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`
+    : `<strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`;
 
   panel.innerHTML = `
     <div class="scenario-tag ${caseData.tagClass}">${caseData.tag}</div>
@@ -889,7 +934,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
     <div class="scenario-text">${caseData.situation}</div>
     <div class="round-status">
       <div class="round-status-title">${modeLabel}</div>
-      <div class="round-status-text"><strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.</div>
+      <div class="round-status-text">${roundStatusText}</div>
     </div>
     <div class="scenario-problem">
       <div class="scenario-problem-title">Das Problem</div>
@@ -1432,12 +1477,15 @@ function updateSidebar(): void {
 
   const role = state.selectedRole;
   const abilityAvail = isAbilityAvailable(state);
+  const roleStatusText = isRoundSummaryActive()
+    ? `Rundenabschluss bestätigt: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`
+    : `Stimmen in dieser Runde: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`;
 
   el.innerHTML = `
     <div style="font-size:1.8em">${role.icon}</div>
     <div style="font-weight:bold;color:var(--gold);margin:6px 0">${role.name}</div>
     <div style="font-size:0.8em;color:var(--text-dim);margin-bottom:8px">${role.perspective}</div>
-    <div style="font-size:0.76em;color:var(--text-dim);margin-bottom:10px">Stimmen in dieser Runde: ${getCurrentRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}</div>
+    <div style="font-size:0.76em;color:var(--text-dim);margin-bottom:10px">${roleStatusText}</div>
     ${renderAbilityControl(abilityAvail)}
     <div class="role-roster">${roleRoster}</div>
   `;

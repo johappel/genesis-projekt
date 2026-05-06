@@ -219,6 +219,125 @@ describe('LocalBus', () => {
     bus.destroy();
   });
 
+  it('liefert bei state-sync auch einen akzeptierten Rundenabschluss zurueck', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerSession = createEphemeralTransportSession(false);
+    const hostRole = ROLES.find((role) => role.id === 'theologin');
+    const nextRole = ROLES.find((role) => role.id === 'juristin');
+    if (!hostRole || !nextRole) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const joinerFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerSession.clientInfo,
+    });
+    const hostFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: hostSession.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [hostRole, nextRole],
+        selectedRole: nextRole,
+        currentRoleIndex: 1,
+        roundVotes: {
+          theologin: 'sophia-1-b',
+          juristin: 'sophia-1-b',
+        },
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(hostFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'theologin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(joinerFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'juristin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(hostFactory.createVoteCastRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      roleId: 'theologin',
+      optionId: 'sophia-1-b',
+      isTieBreak: false,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(joinerFactory.createVoteCastRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      roleId: 'juristin',
+      optionId: 'sophia-1-b',
+      isTieBreak: false,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(hostFactory.createRoundClosedRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      resolvedOptionId: 'sophia-1-b',
+      voteSummary: [
+        { roleId: 'theologin', optionId: 'sophia-1-b', playerId: hostSession.clientInfo.playerId },
+        { roleId: 'juristin', optionId: 'sophia-1-b', playerId: joinerSession.clientInfo.playerId },
+      ],
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(
+      joinerFactory.createStateSyncRequested({
+        roundId: 'round-0',
+        knownRoundId: 'round-0',
+        knownSeqByPlayer: {},
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const syncEvent = received.findLast((event) => event.eventName === 'state-sync-sent');
+
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        pendingRoundClose: {
+          roundId: 'round-0',
+          caseId: 1,
+          resolvedOptionId: 'sophia-1-b',
+          voteSummary: [
+            { roleId: 'theologin', optionId: 'sophia-1-b', playerId: hostSession.clientInfo.playerId },
+            { roleId: 'juristin', optionId: 'sophia-1-b', playerId: joinerSession.clientInfo.playerId },
+          ],
+        },
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
   it('bestaetigt freie Rollen autoritativ und lehnt doppelte Claims ab', async () => {
     const bus = new LocalBus();
     const hostSession = createEphemeralTransportSession(true);

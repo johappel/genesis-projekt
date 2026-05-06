@@ -26,10 +26,18 @@ export interface VoteSummaryEntry {
   playerId: string;
 }
 
+export interface PendingRoundCloseState {
+  roundId: string;
+  caseId: number;
+  resolvedOptionId: string;
+  voteSummary: VoteSummaryEntry[];
+}
+
 export interface StateSnapshot {
   state: GameState;
   lastAppliedSeqByPlayer: Record<string, number>;
   roleOwners: Record<string, string>;
+  pendingRoundClose?: PendingRoundCloseState | null;
 }
 
 export interface GameCreatedEvent extends TransportEnvelope {
