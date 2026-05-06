@@ -49,6 +49,15 @@ const MULTIPLAYER_RECOVERY_TIMEOUT_MS = 2500;
 
 type PendingMultiplayerRequestKind = 'role-claim' | 'vote' | 'round-close';
 
+type QueuedMultiplayerVote = {
+  phaseKey: string;
+  caseId: number;
+  roleId: string;
+  optionId: string;
+  optionText: string;
+  isTieBreak: boolean;
+};
+
 type MultiplayerIndicatorTone = 'local' | 'connected' | 'waiting' | 'syncing' | 'error';
 
 let pendingMultiplayerRequest:
@@ -57,6 +66,9 @@ let pendingMultiplayerRequest:
       timer: ReturnType<typeof setTimeout>;
     }
   | null = null;
+
+let queuedMultiplayerVote: QueuedMultiplayerVote | null = null;
+let multiplayerQueueNotice = '';
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let timerRemaining = DECISION_TIMER_SECONDS;
@@ -133,6 +145,57 @@ function getCurrentRoundId(): string {
 
 function isCurrentRoleOwnedLocally(): boolean {
   return Boolean(state.selectedRole && multiplayer?.ownsRole(state.selectedRole.id));
+}
+
+function getCurrentVotePhaseKey(): string {
+  return `${getCurrentRoundId()}:${state.tieBreakOptions ? 'tie-break' : 'base'}`;
+}
+
+function getLocalOwnedRole(): typeof ROLES[number] | null {
+  const runtime = multiplayer;
+  if (!runtime) {
+    return null;
+  }
+
+  return state.activeRoles.find((role) => runtime.ownsRole(role.id)) ?? null;
+}
+
+function getLocalPendingRole(): typeof ROLES[number] | null {
+  const localRole = getLocalOwnedRole();
+  if (!localRole || state.roundVotes[localRole.id]) {
+    return null;
+  }
+
+  return localRole;
+}
+
+function getQueuedMultiplayerVote(): QueuedMultiplayerVote | null {
+  const localPendingRole = getLocalPendingRole();
+  if (!queuedMultiplayerVote || !localPendingRole) {
+    return null;
+  }
+
+  if (queuedMultiplayerVote.phaseKey !== getCurrentVotePhaseKey()) {
+    return null;
+  }
+
+  if (queuedMultiplayerVote.roleId !== localPendingRole.id) {
+    return null;
+  }
+
+  return queuedMultiplayerVote;
+}
+
+function syncQueuedMultiplayerVote(): void {
+  if (!isMultiplayerMode()) {
+    queuedMultiplayerVote = null;
+    multiplayerQueueNotice = '';
+    return;
+  }
+
+  if (!getQueuedMultiplayerVote()) {
+    queuedMultiplayerVote = null;
+  }
 }
 
 function setMultiplayerStatus(message: string): void {
@@ -296,11 +359,122 @@ function resetTransientMultiplayerUi(): void {
   pendingDecision = null;
   pendingSystemicNotes = [];
   pendingOverlayAction = 'none';
+  multiplayerQueueNotice = '';
   document.getElementById('consequence-overlay')?.classList.add('hidden');
 }
 
 function canVoteInCurrentClient(): boolean {
   return (!isMultiplayerMode() || isCurrentRoleOwnedLocally()) && !isAwaitingVoteConfirmation();
+}
+
+function canInteractWithDecisionCards(): boolean {
+  if (!isMultiplayerMode()) {
+    return canVoteInCurrentClient();
+  }
+
+  const localPendingRole = getLocalPendingRole();
+  if (!localPendingRole) {
+    return false;
+  }
+
+  return !(state.selectedRole?.id === localPendingRole.id && isAwaitingVoteConfirmation());
+}
+
+function getVoteRejectionReasonLabel(reason?: string): string {
+  switch (reason) {
+    case 'TURN_MISMATCH':
+      return 'Die Runde war beim Host schon weiter. Deine Vormerkung wurde nicht mehr uebernommen';
+    case 'ROUND_MISMATCH':
+      return 'Die Runde hat sich geaendert. Bitte synchronisiere kurz neu';
+    case 'ALREADY_VOTED':
+      return 'Diese Rolle hat fuer die aktuelle Phase bereits abgestimmt';
+    case 'ROLE_NOT_OWNED':
+      return 'Diese Rolle gehoert in diesem Raum einem anderen Client';
+    case 'ROLE_NOT_CLAIMED':
+      return 'Die Rolle ist im Raum noch nicht sauber zugewiesen';
+    default:
+      return reason ?? 'unbekannter Grund';
+  }
+}
+
+function submitMultiplayerVote(option: DecisionOption, source: 'manual' | 'queued'): void {
+  const runtime = multiplayer;
+  const selectedRole = state.selectedRole;
+  if (!runtime || !selectedRole) {
+    return;
+  }
+
+  clearTimer();
+  runMultiplayerRequest({
+    kind: 'vote',
+    waitMessage: `Stimme fuer ${option.text} haengt fest.`,
+    request: () => runtime.castVote({
+      caseId: state.currentCase + 1,
+      roleId: selectedRole.id,
+      optionId: option.id,
+      isTieBreak: Boolean(state.tieBreakOptions),
+    }),
+    errorMessage: 'Stimme konnte nicht uebertragen werden.',
+  });
+  setMultiplayerStatus(
+    source === 'queued'
+      ? `Vorgemerkte Stimme fuer ${option.text} wird jetzt fuer ${selectedRole.name} uebertragen.`
+      : `Stimme fuer ${option.text} gesendet. Warte auf Bestaetigung.`
+  );
+  renderCase();
+}
+
+function queueMultiplayerVote(option: DecisionOption): void {
+  const localPendingRole = getLocalPendingRole();
+  if (!localPendingRole) {
+    setMultiplayerStatus('Deine Rolle hat in dieser Runde bereits abgestimmt oder ist noch nicht sauber synchronisiert.');
+    return;
+  }
+
+  const existingQueuedVote = getQueuedMultiplayerVote();
+  if (
+    existingQueuedVote
+    && existingQueuedVote.roleId === localPendingRole.id
+    && existingQueuedVote.optionId === option.id
+  ) {
+    queuedMultiplayerVote = null;
+    multiplayerQueueNotice = '';
+    setMultiplayerStatus(`Vormerkung fuer ${localPendingRole.name} wurde entfernt.`);
+    renderCase();
+    return;
+  }
+
+  queuedMultiplayerVote = {
+    phaseKey: getCurrentVotePhaseKey(),
+    caseId: state.currentCase + 1,
+    roleId: localPendingRole.id,
+    optionId: option.id,
+    optionText: option.text,
+    isTieBreak: Boolean(state.tieBreakOptions),
+  };
+  multiplayerQueueNotice = '';
+  setMultiplayerStatus(`„${option.text}“ ist fuer ${localPendingRole.name} vorgemerkt und wird bei ihrem Zug automatisch gesendet.`);
+  renderCase();
+}
+
+function maybeAutoSubmitQueuedVote(caseData: typeof CASES[0]): boolean {
+  if (!isMultiplayerMode() || isAwaitingVoteConfirmation()) {
+    return false;
+  }
+
+  const queuedVote = getQueuedMultiplayerVote();
+  if (!queuedVote || state.selectedRole?.id !== queuedVote.roleId) {
+    return false;
+  }
+
+  const option = getAvailableDecisions(caseData).find((decision) => decision.id === queuedVote.optionId);
+  if (!option) {
+    queuedMultiplayerVote = null;
+    return false;
+  }
+
+  submitMultiplayerVote(option, 'queued');
+  return true;
 }
 
 function addActiveRoleById(roleId: string): void {
@@ -387,12 +561,12 @@ function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cas
     state = advanceToNextRole(state);
 
     if (isMultiplayerMode()) {
-      if (isCurrentRoleOwnedLocally()) {
-        showCurrentTurnPrompt('Du bist jetzt online am Zug. Gib deine Stimme in diesem Browser ab.');
-      } else {
-        setMultiplayerStatus(`Warte auf ${state.selectedRole?.name ?? 'die nächste Rolle'} im Relay-Raum.`);
-        renderCase();
-      }
+      setMultiplayerStatus(
+        isCurrentRoleOwnedLocally()
+          ? `Du bist jetzt mit ${state.selectedRole?.name ?? 'deiner Rolle'} am Zug. Vorgemerkte Wahlen werden sofort uebernommen.`
+          : `Warte auf ${state.selectedRole?.name ?? 'die naechste Rolle'} im Relay-Raum.`
+      );
+      renderCase();
       return;
     }
 
@@ -537,7 +711,8 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
 
     if (voteEvent.playerId === multiplayer?.playerId) {
       clearPendingMultiplayerRequest();
-      setMultiplayerStatus(`Stimme abgelehnt: ${voteEvent.rejectionReason ?? 'unbekannter Grund'}.`);
+      queuedMultiplayerVote = null;
+      setMultiplayerStatus(`Stimme abgelehnt: ${getVoteRejectionReasonLabel(voteEvent.rejectionReason)}.`);
     }
     return;
   }
@@ -769,6 +944,18 @@ function showNextRoundPrompt(): void {
   ensureCouncilPreVote();
 
   const nextCase = CASES[state.currentCase];
+  if (isMultiplayerMode()) {
+    multiplayerQueueNotice = '';
+    if (nextCase) {
+      setMultiplayerStatus(`Naechster Fall offen: ${nextCase.title}. Du kannst fuer deine Rolle sofort wieder vormerken.`);
+      renderCase();
+      return;
+    }
+
+    showScreen('screen-finale');
+    return;
+  }
+
   const overlay = document.getElementById('consequence-overlay');
   const icon = document.getElementById('consequence-icon');
   const title = document.getElementById('consequence-title');
@@ -852,8 +1039,12 @@ function startGame(): void {
   showScreen('screen-game');
   updateSidebar();
 
-  if (isMultiplayerMode() && !isCurrentRoleOwnedLocally()) {
-    setMultiplayerStatus(`Die Runde ist offen. Warte auf ${state.selectedRole?.name ?? 'die erste Rolle'} im Relay-Raum.`);
+  if (isMultiplayerMode()) {
+    setMultiplayerStatus(
+      isCurrentRoleOwnedLocally()
+        ? 'Die Runde ist offen. Du kannst sofort abstimmen.'
+        : 'Die Runde ist offen. Du kannst fuer deine Rolle schon jetzt eine Entscheidung vormerken.'
+    );
     renderCase();
     return;
   }
@@ -872,6 +1063,8 @@ function renderCase(): void {
     return;
   }
 
+  syncQueuedMultiplayerVote();
+
   // Header / Progress
   const phaseEl = document.getElementById('phase-indicator');
   const roleDisp = document.getElementById('current-role-display');
@@ -886,6 +1079,9 @@ function renderCase(): void {
   updateProtocol();
   updateSidebar();
   renderScenarioPanel(caseData);
+  if (maybeAutoSubmitQueuedVote(caseData)) {
+    return;
+  }
   if (canVoteInCurrentClient()) {
     startDecisionTimer(caseData);
   } else {
@@ -923,9 +1119,35 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
       ? 'Stichwahl'
       : 'Ratsrunde';
   const canVoteHere = canVoteInCurrentClient();
+  const canInteractHere = canInteractWithDecisionCards();
+  const localPendingRole = getLocalPendingRole();
+  const queuedVote = getQueuedMultiplayerVote();
   const roundStatusText = isRoundSummaryActive()
     ? `Die Runde wurde host-autoritativ abgeschlossen. Erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`
     : `<strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`;
+  const decisionGuidance = !isMultiplayerMode()
+    ? (canVoteHere
+      ? (DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Die Runde bleibt verdeckt, bis alle aktiven Rollen abgestimmt haben.')
+      : isAwaitingVoteConfirmation()
+        ? 'Deine Stimme wurde gesendet. Warte auf die host-autoritative Bestätigung.'
+        : 'Warte auf die Rolle, die in diesem Relay-Raum gerade stimmberechtigt ist.')
+    : !localPendingRole
+      ? 'Deine lokale Rolle hat fuer diese Runde bereits abgestimmt oder ist noch nicht geclaimt.'
+      : state.selectedRole?.id === localPendingRole.id
+        ? isAwaitingVoteConfirmation()
+          ? 'Deine Stimme wurde gesendet. Warte auf die host-autoritative Bestätigung.'
+          : queuedVote
+            ? `Du bist am Zug. Die vorgemerkte Wahl „${queuedVote.optionText}“ wird jetzt automatisch uebertragen.`
+            : 'Du bist am Zug. Stimme jetzt ab.'
+        : queuedVote
+          ? `„${queuedVote.optionText}“ ist fuer ${localPendingRole.name} vorgemerkt. Du kannst die Wahl bis zu ihrem Zug noch aendern.`
+          : `${localPendingRole.name} ist noch nicht am Zug. Du kannst deine Entscheidung jetzt vormerken; sie wird spaeter automatisch uebertragen.`;
+  const queuedNoteMarkup = queuedVote && localPendingRole
+    ? `<div class="decision-queue-note">Vorgemerkt fuer ${localPendingRole.name}: ${queuedVote.optionText}</div>`
+    : '';
+  const queueNoticeMarkup = multiplayerQueueNotice
+    ? `<div class="decision-queue-reset-note">${multiplayerQueueNotice}</div>`
+    : '';
 
   panel.innerHTML = `
     <div class="scenario-tag ${caseData.tagClass}">${caseData.tag}</div>
@@ -955,11 +1177,9 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
 
     <div>
       <div class="panel-title">⚡ Entscheidung treffen</div>
-      <div class="decision-guidance">${canVoteHere
-        ? (DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Die Runde bleibt verdeckt, bis alle aktiven Rollen abgestimmt haben.')
-        : isAwaitingVoteConfirmation()
-          ? 'Deine Stimme wurde gesendet. Warte auf die host-autoritative Bestätigung.'
-          : 'Warte auf die Rolle, die in diesem Relay-Raum gerade stimmberechtigt ist.'}</div>
+      <div class="decision-guidance">${decisionGuidance}</div>
+      ${queueNoticeMarkup}
+      ${queuedNoteMarkup}
       <div id="decision-timer-box" class="decision-timer">
         <div class="timer-label">
           <span>Beratungszeit</span>
@@ -972,10 +1192,12 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
       ${availableDecisions
         .map((d) => {
           const tags = formatEffectTags(getAppliedRoundEffect(d.effects) as Record<string, number>, 'decision');
+          const isQueued = queuedVote?.optionId === d.id;
           return `
-          <div class="decision-card" tabindex="0" style="${canVoteHere ? '' : 'opacity:0.5;pointer-events:none;'}"
-               ${canVoteHere ? `onclick="handleDecision('${d.id}')" onkeydown="if(event.key==='Enter'||event.key===' ')handleDecision('${d.id}')"` : ''}>
+          <div class="decision-card${isQueued ? ' queued' : ''}" tabindex="0" style="${canInteractHere ? '' : 'opacity:0.5;pointer-events:none;'}"
+               ${canInteractHere ? `onclick="handleDecision('${d.id}')" onkeydown="if(event.key==='Enter'||event.key===' ')handleDecision('${d.id}')"` : ''}>
             <div class="decision-text">${d.icon} ${d.text}</div>
+            ${isQueued ? '<div class="decision-queued-badge">Vorgemerkt</div>' : ''}
             <div class="decision-effects">${tags}</div>
           </div>`;
         })
@@ -1032,13 +1254,22 @@ function selectLens(lensId: string, caseData: typeof CASES[0]): void {
 function handleDecision(optionId: string): void {
   const caseData = CASES[state.currentCase];
   if (!caseData) return;
-  if (isMultiplayerMode() && !isCurrentRoleOwnedLocally()) {
-    setMultiplayerStatus('Diese Stimme gehört in dieser Runde einer anderen Sitzung.');
-    return;
-  }
   const availableDecisions = getAvailableDecisions(caseData);
   const option = availableDecisions.find((d) => d.id === optionId);
   if (!option) return;
+
+  if (isMultiplayerMode()) {
+    const localPendingRole = getLocalPendingRole();
+    if (!localPendingRole) {
+      setMultiplayerStatus('Deine lokale Rolle kann in dieser Phase gerade keine Stimme mehr abgeben.');
+      return;
+    }
+
+    if (state.selectedRole?.id !== localPendingRole.id) {
+      queueMultiplayerVote(option);
+      return;
+    }
+  }
 
   // Prophetisches Veto prüfen
   if (state.abilities.prophetinVetoActive) {
@@ -1051,21 +1282,7 @@ function handleDecision(optionId: string): void {
   const optionIds = availableDecisions.map((decision) => decision.id);
 
   if (isMultiplayerMode() && state.selectedRole) {
-    const selectedRole = state.selectedRole;
-    clearTimer();
-    runMultiplayerRequest({
-      kind: 'vote',
-      waitMessage: `Stimme für ${option.text} hängt fest.`,
-      request: () => multiplayer?.castVote({
-        caseId: state.currentCase + 1,
-        roleId: selectedRole.id,
-        optionId: option.id,
-        isTieBreak: Boolean(state.tieBreakOptions),
-      }) ?? Promise.resolve(),
-      errorMessage: 'Stimme konnte nicht übertragen werden.',
-    });
-    setMultiplayerStatus(`Stimme für ${option.text} gesendet. Warte auf Bestätigung.`);
-    renderCase();
+    submitMultiplayerVote(option, 'manual');
     return;
   }
 
@@ -1156,6 +1373,18 @@ function showTieBreakNotice(
   const detailText = optionLabels.length
     ? `Gleichstand mit ${voteCount} Stimme(n). In der Stichwahl bleiben nur noch diese Optionen: ${optionLabels.join(' / ')}.`
     : `Gleichstand mit ${voteCount} Stimme(n). Jetzt folgt eine Stichwahl.`;
+
+  if (isMultiplayerMode()) {
+    const discardedQueuedVote = queuedMultiplayerVote;
+    queuedMultiplayerVote = null;
+    multiplayerQueueNotice = discardedQueuedVote
+      ? 'Die alte Vormerkung wurde fuer die Stichwahl verworfen. Bitte waehle zwischen den verbleibenden Optionen neu.'
+      : 'Die Stichwahl ist gestartet. Bitte waehle jetzt nur noch zwischen den verbleibenden Optionen.';
+    setMultiplayerStatus(`${detailText} ${multiplayerQueueNotice}`);
+    renderCase();
+    return;
+  }
+
   showCurrentTurnPrompt(detailText);
 }
 
@@ -1451,6 +1680,7 @@ function updateSidebar(): void {
   if (!el) return;
 
   const currentRoleId = state.selectedRole?.id ?? null;
+  const queuedVote = getQueuedMultiplayerVote();
   const roundMetaText = isRoundSummaryActive()
     ? `Rundenabschluss bestätigt · ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`
     : `Stimmen in dieser Runde: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`;
@@ -1458,16 +1688,24 @@ function updateSidebar(): void {
   const roleRoster = state.activeRoles
     .map((role) => {
       const isCurrentRole = role.id === currentRoleId;
+      const isQueuedRole = queuedVote?.roleId === role.id;
       const status = state.roundVotes[role.id]
         ? 'abgestimmt'
+        : isQueuedRole
+          ? 'vorgemerkt'
         : isCurrentRole
           ? 'ist am Zug'
           : 'wartet';
       const statusClass = state.roundVotes[role.id]
         ? 'voted'
+        : isQueuedRole
+          ? 'queued'
         : isCurrentRole
           ? 'current'
           : 'waiting';
+      const queueMarkup = isQueuedRole && queuedVote
+        ? `<div class="role-roster-queue-note">Vormerkung: ${queuedVote.optionText}</div>`
+        : '';
       const abilityMarkup = isCurrentRole
         ? renderRoleAbilityInline(role, isAbilityAvailable(state))
         : '';
@@ -1480,6 +1718,7 @@ function updateSidebar(): void {
               <span class="role-roster-status">${status}</span>
             </div>
             <div class="role-roster-perspective">${role.perspective}</div>
+            ${queueMarkup}
             ${abilityMarkup}
           </div>
         </div>`;

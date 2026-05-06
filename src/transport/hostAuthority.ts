@@ -269,6 +269,14 @@ export class HostAuthority {
       };
     }
 
+    const expectedRoleId = this.getMergedSnapshot().state.selectedRole?.id;
+    if (expectedRoleId && expectedRoleId !== event.roleId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'TURN_MISMATCH',
+      };
+    }
+
     const phaseKey = getVotePhaseKey(event.roundId, event.isTieBreak);
     const roundVotes = this.acceptedVotesByPhase[phaseKey] ?? {};
     if (roundVotes[event.roleId]) {

@@ -241,12 +241,8 @@ describe('LocalBus', () => {
       state: {
         ...createGame(),
         activeRoles: [hostRole, nextRole],
-        selectedRole: nextRole,
-        currentRoleIndex: 1,
-        roundVotes: {
-          theologin: 'sophia-1-b',
-          juristin: 'sophia-1-b',
-        },
+        selectedRole: hostRole,
+        currentRoleIndex: 0,
       },
       lastAppliedSeqByPlayer: {},
       roleOwners: {},
@@ -553,6 +549,93 @@ describe('LocalBus', () => {
       voteStatus: 'rejected',
       roleId: 'prophetin',
       rejectionReason: 'ROLE_NOT_OWNED',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('lehnt Stimmen ab, wenn nicht die aktuelle Rolle am Zug ist', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerA = createEphemeralTransportSession(false);
+    const joinerB = createEphemeralTransportSession(false);
+    const theologin = ROLES.find((role) => role.id === 'theologin');
+    const juristin = ROLES.find((role) => role.id === 'juristin');
+    if (!theologin || !juristin) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const factoryA = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerA.clientInfo,
+    });
+    const factoryB = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerB.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [theologin, juristin],
+        selectedRole: theologin,
+        currentRoleIndex: 0,
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(factoryA.createRoleClaimRequested({ roundId: 'round-0', roleId: 'theologin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryB.createRoleClaimRequested({ roundId: 'round-0', roleId: 'juristin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(factoryB.createVoteCastRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      roleId: 'juristin',
+      optionId: 'sophia-1-b',
+      isTieBreak: false,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rejectedVote = received.find(
+      (event) =>
+        event.eventName === 'vote-cast'
+        && event.voteStatus === 'rejected'
+        && event.roleId === 'juristin'
+        && event.playerId === joinerB.clientInfo.playerId
+        && event.rejectionReason === 'TURN_MISMATCH'
+    );
+
+    expect(rejectedVote).toMatchObject({
+      eventName: 'vote-cast',
+      voteStatus: 'rejected',
+      roleId: 'juristin',
+      rejectionReason: 'TURN_MISMATCH',
       authoritativePlayerId: hostSession.clientInfo.playerId,
     });
 

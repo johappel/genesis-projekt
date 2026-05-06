@@ -64,7 +64,7 @@ export interface VoteCastEvent extends TransportEnvelope {
   isTieBreak: boolean;
   voteStatus: 'requested' | 'accepted' | 'rejected';
   authoritativePlayerId?: string;
-  rejectionReason?: 'ROLE_NOT_CLAIMED' | 'ROLE_NOT_OWNED' | 'ALREADY_VOTED' | 'ROUND_MISMATCH';
+  rejectionReason?: 'ROLE_NOT_CLAIMED' | 'ROLE_NOT_OWNED' | 'ALREADY_VOTED' | 'ROUND_MISMATCH' | 'TURN_MISMATCH';
 }
 
 export interface RoundClosedEvent extends TransportEnvelope {
