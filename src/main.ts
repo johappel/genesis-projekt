@@ -1450,66 +1450,69 @@ function updateSidebar(): void {
   const el = document.getElementById('sidebar-role');
   if (!el) return;
 
+  const currentRoleId = state.selectedRole?.id ?? null;
+  const roundMetaText = isRoundSummaryActive()
+    ? `Rundenabschluss bestätigt · ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`
+    : `Stimmen in dieser Runde: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`;
+
   const roleRoster = state.activeRoles
     .map((role) => {
+      const isCurrentRole = role.id === currentRoleId;
       const status = state.roundVotes[role.id]
-        ? 'hat abgestimmt'
-        : role.id === state.selectedRole?.id
+        ? 'abgestimmt'
+        : isCurrentRole
           ? 'ist am Zug'
           : 'wartet';
       const statusClass = state.roundVotes[role.id]
         ? 'voted'
-        : role.id === state.selectedRole?.id
+        : isCurrentRole
           ? 'current'
           : 'waiting';
+      const abilityMarkup = isCurrentRole
+        ? renderRoleAbilityInline(role, isAbilityAvailable(state))
+        : '';
       return `
         <div class="role-roster-item ${statusClass}">
-          <span>${role.icon} ${role.name}</span>
-          <span>${status}</span>
+          <div class="role-roster-avatar">${role.icon}</div>
+          <div class="role-roster-content">
+            <div class="role-roster-line">
+              <span class="role-roster-name">${role.name}</span>
+              <span class="role-roster-status">${status}</span>
+            </div>
+            <div class="role-roster-perspective">${role.perspective}</div>
+            ${abilityMarkup}
+          </div>
         </div>`;
     })
     .join('');
 
-  if (!state.selectedRole) {
-    el.innerHTML = `<div class="role-roster">${roleRoster}</div>`;
-    return;
-  }
-
-  const role = state.selectedRole;
-  const abilityAvail = isAbilityAvailable(state);
-  const roleStatusText = isRoundSummaryActive()
-    ? `Rundenabschluss bestätigt: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`
-    : `Stimmen in dieser Runde: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`;
-
   el.innerHTML = `
-    <div style="font-size:1.8em">${role.icon}</div>
-    <div style="font-weight:bold;color:var(--gold);margin:6px 0">${role.name}</div>
-    <div style="font-size:0.8em;color:var(--text-dim);margin-bottom:8px">${role.perspective}</div>
-    <div style="font-size:0.76em;color:var(--text-dim);margin-bottom:10px">${roleStatusText}</div>
-    ${renderAbilityControl(abilityAvail)}
+    <div class="sidebar-round-summary">${roundMetaText}</div>
     <div class="role-roster">${roleRoster}</div>
   `;
 }
 
-function renderAbilityControl(available: boolean): string {
-  if (!state.selectedRole) return '';
-  const role = state.selectedRole;
+function renderRoleAbilityInline(role: typeof ROLES[number], available: boolean): string {
+  if (isRoundSummaryActive()) {
+    return '<div class="role-ability-inline role-ability-inline-muted">Runde bereits entschieden.</div>';
+  }
 
   if (isMultiplayerMode()) {
-    return '<div style="font-size:0.76em;color:var(--text-dim);margin-top:6px">Relay-Modus: Sonderfähigkeiten sind vorerst deaktiviert, damit alle Clients denselben Zustand behalten.</div>';
+    return '<div class="role-ability-inline role-ability-inline-muted">Relay-Modus: Sonderfähigkeiten bleiben lokal deaktiviert.</div>';
   }
 
   if (role.id === 'sozialarbeiterin') {
-    return `<div style="font-size:0.76em;color:#7fb3e8;margin-top:6px">⭐ Passiv: Betroffene Gruppe wird pro Fall automatisch sichtbar (+Gerechtigkeit, +Frieden).</div>`;
+    return '<div class="role-ability-inline role-ability-inline-passive">⭐ Passiv: Betroffene Gruppe wird pro Fall automatisch sichtbar.</div>';
   }
 
   const label = available ? '⭐ Sonderfähigkeit einsetzen' : '✓ Bereits genutzt';
   return `
-    <button class="btn btn-secondary" onclick="triggerAbility()" ${available ? '' : 'disabled'}
-      style="width:100%;margin-top:6px;padding:9px 11px;font-size:0.78em">
+    <div class="role-ability-inline">
+      <button class="btn btn-secondary role-ability-button" onclick="triggerAbility()" ${available ? '' : 'disabled'}>
       ${label}
-    </button>
-    <div style="font-size:0.74em;color:var(--text-dim);margin-top:4px">${role.abilityDescription}</div>
+      </button>
+      <div class="role-ability-copy">${role.abilityDescription}</div>
+    </div>
   `;
 }
 
