@@ -1842,10 +1842,10 @@ function renderCase(): void {
   updateValuesDisplay();
   updateProtocol();
   updateSidebar();
-  renderScenarioPanel(caseData);
   if (maybeAutoSubmitQueuedVote(caseData)) {
     return;
   }
+  renderScenarioPanel(caseData);
   if ((isMultiplayerMode() && !isRoundSummaryActive()) || canVoteInCurrentClient()) {
     startDecisionTimer(caseData);
   } else {
@@ -1917,6 +1917,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   const lensInitiativeRole = getCurrentLensInitiativeRole();
   const canChooseLensHere = canCurrentClientChooseLens();
   const queuedVote = getQueuedMultiplayerVote();
+  const isFutureQueuedVote = Boolean(queuedVote && state.selectedRole?.id !== queuedVote.roleId);
   const roundStatusText = isRoundSummaryActive()
     ? `Die Runde wurde host-autoritativ abgeschlossen. Erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`
     : `<strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`;
@@ -1937,7 +1938,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
         : queuedVote
           ? `„${queuedVote.optionText}“ ist fuer ${localPendingRole.name} vorgemerkt. Du kannst die Wahl bis zu ihrem Zug noch aendern.`
           : `${localPendingRole.name} ist noch nicht am Zug. Du kannst deine Entscheidung jetzt vormerken; sie wird spaeter automatisch uebertragen.`;
-  const queuedNoteMarkup = queuedVote && localPendingRole
+  const queuedNoteMarkup = isFutureQueuedVote && queuedVote && localPendingRole
     ? `<div class="decision-queue-note">Vorgemerkt fuer ${localPendingRole.name}: ${queuedVote.optionText}</div>`
     : '';
   const queueNoticeMarkup = multiplayerQueueNotice
@@ -2005,7 +2006,7 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
       ${availableDecisions
         .map((d) => {
           const tags = formatEffectTags(getAppliedRoundEffect(d.effects) as Record<string, number>, 'decision');
-          const isQueued = queuedVote?.optionId === d.id;
+          const isQueued = isFutureQueuedVote && queuedVote?.optionId === d.id;
           return `
           <div class="decision-card${isQueued ? ' queued' : ''}" tabindex="0" style="${canInteractHere ? '' : 'opacity:0.5;pointer-events:none;'}"
                ${canInteractHere ? `onclick="handleDecision('${d.id}')" onkeydown="if(event.key==='Enter'||event.key===' ')handleDecision('${d.id}')"` : ''}>
