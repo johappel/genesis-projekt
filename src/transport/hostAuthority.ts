@@ -1,8 +1,13 @@
 import { TransportEventFactory } from './eventFactory.js';
+import { createGame } from '../game/engine/createGame.js';
 import { getNextPendingRole, haveAllActiveRolesVoted } from '../game/engine/voting.js';
 import { MULTIPLAYER_TUNING } from './config.js';
+import { GAMEPLAY_TIMING } from '../game/config.js';
+import { LENSES } from '../game/data/lenses.js';
 import type { EphemeralTransportSession } from './session.js';
 import type {
+  GameResetEvent,
+  LensSelectedEvent,
   PendingRoundCloseState,
   RoleClaimedEvent,
   RoundClosedEvent,
@@ -17,9 +22,11 @@ export interface HostAuthorityOptions {
   session: EphemeralTransportSession;
   rulesVersion: string;
   maxPlayers: number;
+  validLensIds: string[];
   validRoleIds: string[];
   getCurrentRoundId: () => string;
   getAuthoritativeSnapshot: () => StateSnapshot;
+  getResetSnapshot?: () => StateSnapshot;
 }
 
 export class HostAuthority {
@@ -31,15 +38,21 @@ export class HostAuthority {
 
   private readonly maxPlayers: number;
 
+  private readonly validLensIds: Set<string>;
+
   private readonly validRoleIds: Set<string>;
 
   private readonly getCurrentRoundId: () => string;
 
   private readonly getAuthoritativeSnapshot: () => StateSnapshot;
 
+  private readonly getResetSnapshot: () => StateSnapshot;
+
   private readonly eventFactory: TransportEventFactory;
 
   private readonly acceptedRoleOwners: Record<string, string> = {};
+
+  private readonly acceptedLensSelectionsByRound: Record<string, LensSelectedEvent> = {};
 
   private readonly acceptedVotesByPhase: Record<string, Record<string, VoteCastEvent>> = {};
 
@@ -56,9 +69,11 @@ export class HostAuthority {
     this.gameId = options.gameId;
     this.rulesVersion = options.rulesVersion;
     this.maxPlayers = options.maxPlayers;
+    this.validLensIds = new Set(options.validLensIds);
     this.validRoleIds = new Set(options.validRoleIds);
     this.getCurrentRoundId = options.getCurrentRoundId;
     this.getAuthoritativeSnapshot = options.getAuthoritativeSnapshot;
+    this.getResetSnapshot = options.getResetSnapshot ?? createDefaultResetSnapshot;
     this.eventFactory = new TransportEventFactory({
       gameId: options.gameId,
       clientInfo: options.session.clientInfo,
@@ -89,6 +104,16 @@ export class HostAuthority {
         return;
       }
 
+      if (event.eventName === 'game-reset' && event.resetStatus === 'requested') {
+        void this.handleGameResetRequested(event);
+        return;
+      }
+
+      if (event.eventName === 'lens-selected' && event.selectionStatus === 'requested') {
+        void this.handleLensSelectedRequested(event);
+        return;
+      }
+
       if (event.eventName === 'vote-cast' && event.voteStatus === 'requested') {
         void this.handleVoteCastRequested(event);
         return;
@@ -107,6 +132,17 @@ export class HostAuthority {
       maxPlayers: this.maxPlayers,
     });
     await this.bus.publish(event);
+  }
+
+  async publishGameReset(requestedByPlayerId: string): Promise<void> {
+    this.clearAuthoritativeState();
+    await this.bus.publish(
+      this.eventFactory.createGameResetAccepted({
+        roundId: 'round-0',
+        requestedByPlayerId,
+        snapshot: this.getResetSnapshot(),
+      })
+    );
   }
 
   async publishAuthoritativeVote(params: {
@@ -167,6 +203,7 @@ export class HostAuthority {
     const snapshot = this.getAuthoritativeSnapshot();
     const currentRoundId = `round-${snapshot.state.currentCase}`;
     const phaseKey = getVotePhaseKey(snapshot.state);
+    const acceptedLensSelection = this.acceptedLensSelectionsByRound[currentRoundId] ?? null;
     const authoritativeRoundVotes = Object.values(this.acceptedVotesByPhase[phaseKey] ?? {}).reduce<Record<string, string>>(
       (votes, voteEvent) => {
         votes[voteEvent.roleId] = voteEvent.optionId;
@@ -177,6 +214,12 @@ export class HostAuthority {
 
     let mergedState = {
       ...snapshot.state,
+      selectedLens: acceptedLensSelection
+        ? LENSES.find((lens) => lens.id === acceptedLensSelection.lensId) ?? snapshot.state.selectedLens
+        : snapshot.state.selectedLens,
+      phaseTimerBonusSeconds: acceptedLensSelection
+        ? acceptedLensSelection.timerBonusSeconds
+        : snapshot.state.phaseTimerBonusSeconds,
       roundVotes: {
         ...snapshot.state.roundVotes,
         ...authoritativeRoundVotes,
@@ -219,6 +262,32 @@ export class HostAuthority {
     }
   }
 
+  private async handleGameResetRequested(event: GameResetEvent): Promise<void> {
+    await this.publishGameReset(event.requestedByPlayerId);
+  }
+
+  private async handleLensSelectedRequested(event: LensSelectedEvent): Promise<void> {
+    const resolution = this.resolveLensSelection(event);
+    const response = this.eventFactory.createLensSelectedResolved({
+      roundId: this.getCurrentRoundId(),
+      lensId: event.lensId,
+      selectedByRoleId: event.selectedByRoleId,
+      selectedByPlayerId: event.selectedByPlayerId,
+      timerBonusSeconds: resolution.selectionStatus === 'accepted' ? event.timerBonusSeconds : 0,
+      selectionStatus: resolution.selectionStatus,
+      rejectionReason: resolution.rejectionReason,
+    });
+
+    if (resolution.selectionStatus === 'accepted') {
+      this.acceptedLensSelectionsByRound[this.getCurrentRoundId()] = response;
+    }
+
+    await this.bus.publish(response);
+    if (resolution.selectionStatus === 'accepted') {
+      this.scheduleFollowupStateSync();
+    }
+  }
+
   private async handleVoteCastRequested(event: VoteCastEvent): Promise<void> {
     const resolution = this.resolveVoteCast(event);
     const response = this.eventFactory.createVoteCastResolved({
@@ -254,6 +323,7 @@ export class HostAuthority {
 
     await this.bus.publish(response);
     if (resolution.roundCloseStatus === 'accepted') {
+      delete this.acceptedLensSelectionsByRound[event.roundId];
       this.scheduleFollowupStateSync();
     }
   }
@@ -276,6 +346,31 @@ export class HostAuthority {
         })
       );
     }, MULTIPLAYER_TUNING.followupStateSyncDelayMs);
+  }
+
+  private clearAuthoritativeState(): void {
+    for (const roleId of Object.keys(this.acceptedRoleOwners)) {
+      delete this.acceptedRoleOwners[roleId];
+    }
+
+    for (const roundId of Object.keys(this.acceptedLensSelectionsByRound)) {
+      delete this.acceptedLensSelectionsByRound[roundId];
+    }
+
+    for (const phaseKey of Object.keys(this.acceptedVotesByPhase)) {
+      delete this.acceptedVotesByPhase[phaseKey];
+    }
+
+    for (const roundId of Object.keys(this.acceptedRoundCloses)) {
+      delete this.acceptedRoundCloses[roundId];
+    }
+
+    this.closedRounds.clear();
+
+    if (this.pendingStateSyncTimer !== null) {
+      clearTimeout(this.pendingStateSyncTimer);
+      this.pendingStateSyncTimer = null;
+    }
   }
 
   private resolveRoleClaim(event: RoleClaimedEvent): {
@@ -322,6 +417,75 @@ export class HostAuthority {
     this.acceptedRoleOwners[event.roleId] = event.claimedByPlayerId;
     return {
       claimStatus: 'accepted',
+    };
+  }
+
+  private resolveLensSelection(event: LensSelectedEvent): {
+    selectionStatus: 'accepted' | 'rejected';
+    rejectionReason?: LensSelectedEvent['rejectionReason'];
+  } {
+    if (event.roundId !== this.getCurrentRoundId()) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
+    if (!this.validLensIds.has(event.lensId)) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'LENS_NOT_FOUND',
+      };
+    }
+
+    const snapshot = this.getMergedSnapshot();
+    const ownerPlayerId = snapshot.roleOwners[event.selectedByRoleId];
+    if (!ownerPlayerId) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_CLAIMED',
+      };
+    }
+
+    if (ownerPlayerId !== event.playerId || event.selectedByPlayerId !== event.playerId) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_OWNED',
+      };
+    }
+
+    const initiativeRole = getLensInitiativeRole(snapshot.state);
+    if (!initiativeRole || initiativeRole.id !== event.selectedByRoleId) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_INITIATOR',
+      };
+    }
+
+    if (snapshot.state.selectedLens || this.acceptedLensSelectionsByRound[event.roundId]) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'LENS_ALREADY_SELECTED',
+      };
+    }
+
+    const usedLensIds = snapshot.state.usedLensIdsByRole[event.selectedByRoleId] ?? [];
+    if (usedLensIds.includes(event.lensId)) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'LENS_ALREADY_USED',
+      };
+    }
+
+    if (event.timerBonusSeconds !== GAMEPLAY_TIMING.lensSelectionBonusSeconds) {
+      return {
+        selectionStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
+    return {
+      selectionStatus: 'accepted',
     };
   }
 
@@ -509,4 +673,22 @@ function getVotePhaseKey(state: StateSnapshot['state']): string {
   return state.tieBreakOptions
     ? `round-${state.currentCase}:tie-break-${state.tieBreakRound}`
     : `round-${state.currentCase}:base`;
+}
+
+function createDefaultResetSnapshot(): StateSnapshot {
+  return {
+    state: createGame(),
+    lastAppliedSeqByPlayer: {},
+    roleOwners: {},
+    phaseStartedAt: null,
+    pendingRoundClose: null,
+  };
+}
+
+function getLensInitiativeRole(state: StateSnapshot['state']): StateSnapshot['state']['selectedRole'] {
+  if (!state.activeRoles.length) {
+    return null;
+  }
+
+  return state.activeRoles[state.lensInitiativeIndex % state.activeRoles.length] ?? null;
 }

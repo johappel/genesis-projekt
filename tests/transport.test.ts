@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createGame } from '../src/game/engine/createGame.js';
 import { ROLES } from '../src/game/data/roles.js';
+import { LENSES } from '../src/game/data/lenses.js';
 import { TransportEventFactory } from '../src/transport/eventFactory.js';
 import { HostAuthority } from '../src/transport/hostAuthority.js';
 import { LocalBus } from '../src/transport/localBus.js';
@@ -9,6 +10,16 @@ import { createEphemeralTransportSession } from '../src/transport/session.js';
 import { toRelayWebSocketUrl } from '../src/transport/nostrRelayBus.js';
 import { createRelayJoinUrl, formatRelayIssueMessage, readMultiplayerUrlConfig } from '../src/transport/runtime.js';
 import type { StateSnapshot, TransportEvent } from '../src/transport/types.js';
+
+function createResetSnapshot(): StateSnapshot {
+  return {
+    state: createGame(),
+    lastAppliedSeqByPlayer: {},
+    roleOwners: {},
+    phaseStartedAt: null,
+    pendingRoundClose: null,
+  };
+}
 
 const BASE_EVENT: TransportEvent = {
   eventName: 'game-created',
@@ -89,6 +100,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -164,6 +176,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -258,6 +271,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -309,6 +323,209 @@ describe('LocalBus', () => {
     bus.destroy();
   });
 
+  it('setzt per game-reset Rollenbesitz und Snapshot fuer den gesamten Raum zurueck', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerSession = createEphemeralTransportSession(false);
+    const joinerFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerSession.clientInfo,
+    });
+    let hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [ROLES[0], ROLES[1]],
+        selectedRole: ROLES[0],
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+      if (event.eventName === 'game-reset' && event.resetStatus === 'accepted' && event.snapshot) {
+        hostSnapshot = event.snapshot;
+      }
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+      getResetSnapshot: createResetSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(
+      joinerFactory.createRoleClaimRequested({
+        roundId: 'round-0',
+        roleId: ROLES[0].id,
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(
+      joinerFactory.createGameResetRequested({
+        roundId: 'round-0',
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const resetEvent = received.findLast(
+      (event) => event.eventName === 'game-reset' && event.resetStatus === 'accepted'
+    );
+    expect(resetEvent).toMatchObject({
+      eventName: 'game-reset',
+      resetStatus: 'accepted',
+      requestedByPlayerId: joinerSession.clientInfo.playerId,
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+      snapshot: {
+        state: {
+          currentCase: 0,
+          activeRoles: [],
+          selectedRole: null,
+          roundVotes: {},
+          protokoll: [],
+        },
+        roleOwners: {},
+        pendingRoundClose: null,
+      },
+    });
+
+    await bus.publish(
+      joinerFactory.createStateSyncRequested({
+        roundId: 'round-0',
+        knownRoundId: 'round-0',
+        knownSeqByPlayer: {},
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const syncEvent = received.findLast((event) => event.eventName === 'state-sync-sent');
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        state: {
+          activeRoles: [],
+          selectedRole: null,
+          roundVotes: {},
+        },
+        roleOwners: {},
+        pendingRoundClose: null,
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('bestaetigt eine gemeinsame Deutungslinse der rotierenden Initiative und synchronisiert den Zeitbonus', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerSession = createEphemeralTransportSession(false);
+    const initiativeRole = ROLES.find((role) => role.id === 'theologin');
+    const nextRole = ROLES.find((role) => role.id === 'juristin');
+    const lens = LENSES.find((entry) => entry.id === 'werkzeug');
+    if (!initiativeRole || !nextRole || !lens) {
+      throw new Error('Testrahmen für Linsenwahl nicht gefunden');
+    }
+
+    const joinerFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerSession.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [initiativeRole, nextRole],
+        selectedRole: initiativeRole,
+        currentRoleIndex: 0,
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {
+        theologin: joinerSession.clientInfo.playerId,
+      },
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((entry) => entry.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(joinerFactory.createLensSelectedRequested({
+      roundId: 'round-0',
+      lensId: lens.id,
+      selectedByRoleId: initiativeRole.id,
+      timerBonusSeconds: 12,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const acceptedLens = received.find(
+      (event) =>
+        event.eventName === 'lens-selected' &&
+        event.selectionStatus === 'accepted' &&
+        event.lensId === lens.id &&
+        event.selectedByRoleId === initiativeRole.id
+    );
+    const syncEvent = received.findLast(
+      (event) =>
+        event.eventName === 'state-sync-sent' &&
+        event.snapshot.state.selectedLens?.id === lens.id
+    );
+
+    expect(acceptedLens).toMatchObject({
+      eventName: 'lens-selected',
+      selectionStatus: 'accepted',
+      lensId: lens.id,
+      timerBonusSeconds: 12,
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        state: {
+          selectedLens: {
+            id: lens.id,
+          },
+          phaseTimerBonusSeconds: 12,
+        },
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
   it('liefert bei state-sync auch einen akzeptierten Rundenabschluss zurueck', async () => {
     const bus = new LocalBus();
     const hostSession = createEphemeralTransportSession(true);
@@ -350,6 +567,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -455,6 +673,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -543,6 +762,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -689,6 +909,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -765,6 +986,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -866,6 +1088,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });
@@ -950,6 +1173,7 @@ describe('LocalBus', () => {
       rulesVersion: 'v1',
       maxPlayers: 6,
       validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
       getCurrentRoundId: () => 'round-0',
       getAuthoritativeSnapshot: () => hostSnapshot,
     });

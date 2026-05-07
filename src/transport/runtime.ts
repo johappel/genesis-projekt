@@ -6,6 +6,7 @@ import { HostAuthority } from './hostAuthority.js';
 import { NostrRelayBus } from './nostrRelayBus.js';
 import { createEphemeralTransportSession } from './session.js';
 import type {
+  LensSelectedEvent,
   RoundClosedEvent,
   RoleClaimedEvent,
   StateSnapshot,
@@ -37,9 +38,11 @@ export interface RelayMultiplayerRuntimeOptions {
   config: MultiplayerUrlConfig;
   rulesVersion: string;
   maxPlayers: number;
+  validLensIds: string[];
   validRoleIds: string[];
   getCurrentRoundId: () => string;
   getAuthoritativeState: () => GameState;
+  createResetState: () => GameState;
   getPhaseStartedAt: () => number | null;
   onRelayIssue?: (message: string) => void;
 }
@@ -84,6 +87,8 @@ export class RelayMultiplayerRuntime {
 
   private readonly getAuthoritativeState: () => GameState;
 
+  private readonly createResetState: () => GameState;
+
   private readonly getPhaseStartedAt: () => number | null;
 
   private readonly listeners = new Set<TransportListener>();
@@ -106,6 +111,7 @@ export class RelayMultiplayerRuntime {
     this.config = options.config;
     this.getCurrentRoundId = options.getCurrentRoundId;
     this.getAuthoritativeState = options.getAuthoritativeState;
+    this.createResetState = options.createResetState;
     this.getPhaseStartedAt = options.getPhaseStartedAt;
     this.onRelayIssue = options.onRelayIssue;
     this.session = createEphemeralTransportSession(
@@ -130,9 +136,11 @@ export class RelayMultiplayerRuntime {
           session: this.session,
           rulesVersion: options.rulesVersion,
           maxPlayers: options.maxPlayers,
+          validLensIds: options.validLensIds,
           validRoleIds: options.validRoleIds,
           getCurrentRoundId: options.getCurrentRoundId,
           getAuthoritativeSnapshot: () => this.getAuthoritativeSnapshot(),
+          getResetSnapshot: () => this.getResetSnapshot(),
         })
       : null;
 
@@ -241,6 +249,21 @@ export class RelayMultiplayerRuntime {
     );
   }
 
+  async selectLens(params: {
+    lensId: string;
+    selectedByRoleId: string;
+    timerBonusSeconds: number;
+  }): Promise<void> {
+    await this.bus.publish(
+      this.eventFactory.createLensSelectedRequested({
+        roundId: this.getCurrentRoundId(),
+        lensId: params.lensId,
+        selectedByRoleId: params.selectedByRoleId,
+        timerBonusSeconds: params.timerBonusSeconds,
+      })
+    );
+  }
+
   async openPhase(): Promise<void> {
     await this.bus.publish(
       this.eventFactory.createPhaseOpened({
@@ -296,6 +319,14 @@ export class RelayMultiplayerRuntime {
     );
   }
 
+  async requestGameReset(): Promise<void> {
+    await this.bus.publish(
+      this.eventFactory.createGameResetRequested({
+        roundId: this.getCurrentRoundId(),
+      })
+    );
+  }
+
   async resolveTimedOutVote(params: {
     caseId: number;
     phaseKey: string;
@@ -339,6 +370,16 @@ export class RelayMultiplayerRuntime {
     };
   }
 
+  private getResetSnapshot(): StateSnapshot {
+    return {
+      state: this.createResetState(),
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+      phaseStartedAt: null,
+      pendingRoundClose: null,
+    };
+  }
+
   private applyRuntimeEffects(event: TransportEvent): void {
     if (event.eventName === 'game-created') {
       this.authoritativeHostPlayerId = event.hostPlayerId;
@@ -347,6 +388,12 @@ export class RelayMultiplayerRuntime {
 
     if (event.eventName === 'state-sync-sent') {
       this.authoritativeHostPlayerId = event.authoritativePlayerId;
+      this.roleOwners = { ...event.snapshot.roleOwners };
+      return;
+    }
+
+    if (event.eventName === 'game-reset' && event.resetStatus === 'accepted' && event.snapshot) {
+      this.authoritativeHostPlayerId = event.authoritativePlayerId ?? this.authoritativeHostPlayerId;
       this.roleOwners = { ...event.snapshot.roleOwners };
       return;
     }
@@ -386,6 +433,10 @@ export class RelayMultiplayerRuntime {
 
 export function isAcceptedRoleClaim(event: TransportEvent): event is RoleClaimedEvent {
   return event.eventName === 'role-claimed' && event.claimStatus === 'accepted';
+}
+
+export function isAcceptedLensSelection(event: TransportEvent): event is LensSelectedEvent {
+  return event.eventName === 'lens-selected' && event.selectionStatus === 'accepted';
 }
 
 export function isAcceptedVote(event: TransportEvent): event is VoteCastEvent {

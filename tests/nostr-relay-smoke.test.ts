@@ -2,11 +2,22 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createGame } from '../src/game/engine/createGame.js';
 import { ROLES } from '../src/game/data/roles.js';
+import { LENSES } from '../src/game/data/lenses.js';
 import { TransportEventFactory } from '../src/transport/eventFactory.js';
 import { HostAuthority } from '../src/transport/hostAuthority.js';
 import { NostrRelayBus } from '../src/transport/nostrRelayBus.js';
 import { createEphemeralTransportSession } from '../src/transport/session.js';
 import type { StateSnapshot, TransportEvent, TransportMessageBus } from '../src/transport/types.js';
+
+function createResetSnapshot(): StateSnapshot {
+  return {
+    state: createGame(),
+    lastAppliedSeqByPlayer: {},
+    roleOwners: {},
+    phaseStartedAt: null,
+    pendingRoundClose: null,
+  };
+}
 
 const RELAY_URL = 'http://localhost:7000/';
 
@@ -54,8 +65,10 @@ describe('NostrRelayBus smoke', () => {
         rulesVersion: 'v1',
         maxPlayers: 6,
         validRoleIds: ROLES.map((role) => role.id),
+        validLensIds: LENSES.map((lens) => lens.id),
         getCurrentRoundId: () => 'round-0',
         getAuthoritativeSnapshot: () => hostSnapshot,
+        getResetSnapshot: createResetSnapshot,
       });
       hostAuthority.start();
       destroyCallbacks.push(() => hostAuthority.stop());

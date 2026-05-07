@@ -11,6 +11,8 @@ export function createGame(): GameState {
     activeRoles: [],
     currentRoleIndex: 0,
     selectedLens: null,
+    lensInitiativeIndex: 0,
+    phaseTimerBonusSeconds: 0,
     values: { ...INITIAL_VALUES } as Record<GameValueKey, number>,
     macht: INITIAL_MACHT,
     roundVotes: {},
@@ -42,6 +44,7 @@ export function createGame(): GameState {
     },
     protokoll: [],
     linsenUsed: {},
+    usedLensIdsByRole: {},
     pakt: {},
   };
 }

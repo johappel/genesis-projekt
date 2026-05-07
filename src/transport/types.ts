@@ -2,7 +2,9 @@ import type { GameState } from '../game/types.js';
 
 export type TransportEventName =
   | 'game-created'
+  | 'game-reset'
   | 'phase-opened'
+  | 'lens-selected'
   | 'role-claimed'
   | 'vote-cast'
   | 'round-closed'
@@ -50,10 +52,29 @@ export interface GameCreatedEvent extends TransportEnvelope {
   maxPlayers: number;
 }
 
+export interface GameResetEvent extends TransportEnvelope {
+  eventName: 'game-reset';
+  requestedByPlayerId: string;
+  resetStatus: 'requested' | 'accepted';
+  authoritativePlayerId?: string;
+  snapshot?: StateSnapshot;
+}
+
 export interface PhaseOpenedEvent extends TransportEnvelope {
   eventName: 'phase-opened';
   authoritativePlayerId: string;
   snapshot: StateSnapshot;
+}
+
+export interface LensSelectedEvent extends TransportEnvelope {
+  eventName: 'lens-selected';
+  lensId: string;
+  selectedByRoleId: string;
+  selectedByPlayerId: string;
+  timerBonusSeconds: number;
+  selectionStatus: 'requested' | 'accepted' | 'rejected';
+  authoritativePlayerId?: string;
+  rejectionReason?: 'ROUND_MISMATCH' | 'ROLE_NOT_CLAIMED' | 'ROLE_NOT_OWNED' | 'ROLE_NOT_INITIATOR' | 'LENS_ALREADY_SELECTED' | 'LENS_ALREADY_USED' | 'LENS_NOT_FOUND';
 }
 
 export interface RoleClaimedEvent extends TransportEnvelope {
@@ -110,7 +131,9 @@ export interface StateSyncSentEvent extends TransportEnvelope {
 
 export type TransportEvent =
   | GameCreatedEvent
+  | GameResetEvent
   | PhaseOpenedEvent
+  | LensSelectedEvent
   | RoleClaimedEvent
   | VoteCastEvent
   | RoundClosedEvent

@@ -124,6 +124,8 @@ export interface GameState {
   activeRoles: Role[];
   currentRoleIndex: number;
   selectedLens: Lens | null;
+  lensInitiativeIndex: number;
+  phaseTimerBonusSeconds: number;
   values: Record<GameValueKey, number>;
   macht: number;
   roundVotes: Record<string, string>;
@@ -133,5 +135,6 @@ export interface GameState {
   abilities: AbilityState;
   protokoll: ProtocolEntry[];
   linsenUsed: Record<string, number>;
+  usedLensIdsByRole: Record<string, string[]>;
   pakt: Record<string, string>;
 }

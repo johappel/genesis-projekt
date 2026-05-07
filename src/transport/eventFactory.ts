@@ -1,5 +1,7 @@
 import type {
   GameCreatedEvent,
+  GameResetEvent,
+  LensSelectedEvent,
   PhaseOpenedEvent,
   RoundClosedEvent,
   RoleClaimedEvent,
@@ -43,6 +45,31 @@ export class TransportEventFactory {
     };
   }
 
+  createGameResetRequested(params: {
+    roundId: string;
+  }): GameResetEvent {
+    return {
+      ...this.createEnvelope<'game-reset'>('game-reset', params.roundId),
+      requestedByPlayerId: this.clientInfo.playerId,
+      resetStatus: 'requested',
+    };
+  }
+
+  createGameResetAccepted(params: {
+    roundId: string;
+    requestedByPlayerId: string;
+    snapshot: StateSnapshot;
+  }): GameResetEvent {
+    return {
+      ...this.createEnvelope<'game-reset'>('game-reset', params.roundId),
+      playerId: params.requestedByPlayerId,
+      requestedByPlayerId: params.requestedByPlayerId,
+      resetStatus: 'accepted',
+      authoritativePlayerId: this.clientInfo.playerId,
+      snapshot: params.snapshot,
+    };
+  }
+
   createPhaseOpened(params: {
     roundId: string;
     snapshot: StateSnapshot;
@@ -51,6 +78,44 @@ export class TransportEventFactory {
       ...this.createEnvelope<'phase-opened'>('phase-opened', params.roundId),
       authoritativePlayerId: this.clientInfo.playerId,
       snapshot: params.snapshot,
+    };
+  }
+
+  createLensSelectedRequested(params: {
+    roundId: string;
+    lensId: string;
+    selectedByRoleId: string;
+    timerBonusSeconds: number;
+  }): LensSelectedEvent {
+    return {
+      ...this.createEnvelope<'lens-selected'>('lens-selected', params.roundId),
+      lensId: params.lensId,
+      selectedByRoleId: params.selectedByRoleId,
+      selectedByPlayerId: this.clientInfo.playerId,
+      timerBonusSeconds: params.timerBonusSeconds,
+      selectionStatus: 'requested',
+    };
+  }
+
+  createLensSelectedResolved(params: {
+    roundId: string;
+    lensId: string;
+    selectedByRoleId: string;
+    selectedByPlayerId: string;
+    timerBonusSeconds: number;
+    selectionStatus: 'accepted' | 'rejected';
+    rejectionReason?: LensSelectedEvent['rejectionReason'];
+  }): LensSelectedEvent {
+    return {
+      ...this.createEnvelope<'lens-selected'>('lens-selected', params.roundId),
+      playerId: params.selectedByPlayerId,
+      lensId: params.lensId,
+      selectedByRoleId: params.selectedByRoleId,
+      selectedByPlayerId: params.selectedByPlayerId,
+      timerBonusSeconds: params.timerBonusSeconds,
+      selectionStatus: params.selectionStatus,
+      authoritativePlayerId: this.clientInfo.playerId,
+      rejectionReason: params.rejectionReason,
     };
   }
 

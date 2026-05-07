@@ -4,7 +4,8 @@ import { ROLES } from './game/data/roles.js';
 import { LENSES } from './game/data/lenses.js';
 import { CASES } from './game/data/cases.js';
 import { ENDINGS } from './game/data/endings.js';
-import { VALUE_LABELS, DECISION_TIMER_SECONDS, MACHT_WARN_THRESHOLD, MACHT_CRITICAL_THRESHOLD } from './game/data/balance.js';
+import { VALUE_LABELS, MACHT_WARN_THRESHOLD, MACHT_CRITICAL_THRESHOLD } from './game/data/balance.js';
+import { readGameplayTimingConfig } from './game/config.js';
 import { UI_TEXT } from './game/data/uiText.js';
 import { createGame } from './game/engine/createGame.js';
 import { assignRole } from './game/engine/roles.js';
@@ -20,6 +21,7 @@ import { closeRound, getSystemicRiskWarning, getEmergencyEndingBadge, getApplied
 import { activateAbility, isAbilityAvailable } from './game/rules/abilities.js';
 import {
   createRelayJoinUrl,
+  isAcceptedLensSelection,
   isAcceptedRoundClose,
   isAcceptedRoleClaim,
   isAcceptedVote,
@@ -37,6 +39,7 @@ let pendingDecision: DecisionOption | null = null;
 let pendingSystemicNotes: string[] = [];
 let pendingOverlayAction: 'none' | 'render-case' | 'apply-round' | 'advance-after-round' = 'none';
 const MULTIPLAYER_CONFIG = readMultiplayerUrlConfig(window.location.search);
+const GAMEPLAY_RUNTIME_TIMING = readGameplayTimingConfig(window.location.search);
 const DEVELOPER_MODE = new URLSearchParams(window.location.search).has('dev');
 const MULTIPLAYER_DEBUG_ENABLED = new URLSearchParams(window.location.search).get('debug') === '1';
 const MULTIPLAYER_RULES_VERSION = 'v1';
@@ -49,7 +52,7 @@ let multiplayerStatusMessage = MULTIPLAYER_CONFIG
   : '';
 const MULTIPLAYER_RECOVERY_TIMEOUT_MS = MULTIPLAYER_TUNING.recoveryTimeoutMs;
 
-type PendingMultiplayerRequestKind = 'role-claim' | 'vote' | 'round-close';
+type PendingMultiplayerRequestKind = 'role-claim' | 'lens-select' | 'vote' | 'round-close';
 
 type QueuedMultiplayerVote = {
   phaseKey: string;
@@ -88,7 +91,7 @@ let multiplayerDebugEntries: MultiplayerDebugEntry[] = [];
 let multiplayerDebugSequence = 0;
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
-let timerRemaining = DECISION_TIMER_SECONDS;
+let timerRemaining: number = GAMEPLAY_RUNTIME_TIMING.decisionTimerSeconds;
 let timedCaseIndex: number | null = null;
 let timedPhaseKey: string | null = null;
 let currentPhaseStartedAt: number | null = null;
@@ -184,16 +187,17 @@ function markPhaseStarted(startedAt = Date.now()): void {
   currentPhaseStartedAt = startedAt;
   timedCaseIndex = state.currentCase;
   timedPhaseKey = getCurrentVotePhaseKey();
-  timerRemaining = DECISION_TIMER_SECONDS;
+  timerRemaining = getSynchronizedTimerRemaining();
 }
 
 function getSynchronizedTimerRemaining(): number {
+  const totalSeconds = GAMEPLAY_RUNTIME_TIMING.decisionTimerSeconds + state.phaseTimerBonusSeconds;
   if (!currentPhaseStartedAt) {
-    return DECISION_TIMER_SECONDS;
+    return totalSeconds;
   }
 
   const elapsedSeconds = Math.max(0, Math.floor((Date.now() - currentPhaseStartedAt) / 1000));
-  return Math.max(0, DECISION_TIMER_SECONDS - elapsedSeconds);
+  return Math.max(0, totalSeconds - elapsedSeconds);
 }
 
 function getLocalOwnedRole(): typeof ROLES[number] | null {
@@ -212,6 +216,31 @@ function getLocalPendingRole(): typeof ROLES[number] | null {
   }
 
   return localRole;
+}
+
+function getCurrentLensInitiativeRole(): typeof ROLES[number] | null {
+  if (!state.activeRoles.length) {
+    return null;
+  }
+
+  return state.activeRoles[state.lensInitiativeIndex % state.activeRoles.length] ?? null;
+}
+
+function hasLensBeenUsedByRole(roleId: string, lensId: string): boolean {
+  return (state.usedLensIdsByRole[roleId] ?? []).includes(lensId);
+}
+
+function canCurrentClientChooseLens(): boolean {
+  const initiativeRole = getCurrentLensInitiativeRole();
+  if (!initiativeRole || state.selectedLens || isRoundSummaryActive()) {
+    return false;
+  }
+
+  if (!isMultiplayerMode()) {
+    return true;
+  }
+
+  return Boolean(multiplayer?.ownsRole(initiativeRole.id));
 }
 
 function getQueuedMultiplayerVote(): QueuedMultiplayerVote | null {
@@ -392,6 +421,24 @@ function clearPendingMultiplayerRequest(): void {
 
   clearTimeout(pendingMultiplayerRequest.timer);
   pendingMultiplayerRequest = null;
+}
+
+function applyFreshGameReset(nextState: GameState): void {
+  clearPendingMultiplayerRequest();
+  resetTransientMultiplayerUi();
+  state = nextState;
+  clearTimer();
+  timerRemaining = GAMEPLAY_RUNTIME_TIMING.decisionTimerSeconds;
+  timedCaseIndex = null;
+  timedPhaseKey = null;
+  currentPhaseStartedAt = null;
+  pendingDecision = null;
+  pendingSystemicNotes = [];
+  pendingOverlayAction = 'none';
+  syncRoleSelectionFromOwners();
+  updateRoleFlowAfterTransport();
+  initRolesScreen();
+  showScreen('screen-roles');
 }
 
 function isAwaitingVoteConfirmation(): boolean {
@@ -606,6 +653,49 @@ function submitMultiplayerVote(option: DecisionOption, source: 'manual' | 'queue
       : `Stimme fuer ${option.text} gesendet. Warte auf Bestaetigung.`
   );
   renderCase();
+}
+
+function applyAcceptedLensSelection(event: Extract<TransportEvent, { eventName: 'lens-selected' }>): void {
+  const lens = LENSES.find((entry) => entry.id === event.lensId);
+  if (!lens) {
+    return;
+  }
+
+  state = {
+    ...state,
+    selectedLens: lens,
+    phaseTimerBonusSeconds: event.timerBonusSeconds,
+    usedLensIdsByRole: {
+      ...state.usedLensIdsByRole,
+      [event.selectedByRoleId]: Array.from(new Set([...(state.usedLensIdsByRole[event.selectedByRoleId] ?? []), event.lensId])),
+    },
+  };
+
+  const chooserRole = ROLES.find((role) => role.id === event.selectedByRoleId);
+  setMultiplayerStatus(`Deutungslinse ${lens.name} ist für ${chooserRole?.name ?? 'den Rat'} aktiv. +${event.timerBonusSeconds}s Beratungszeit.`);
+  updateSidebar();
+  renderCase();
+}
+
+function getLensSelectionRejectionReasonLabel(reason?: string): string {
+  switch (reason) {
+    case 'ROLE_NOT_CLAIMED':
+      return 'die Initiativrolle ist noch nicht online zugewiesen';
+    case 'ROLE_NOT_OWNED':
+      return 'diese Rolle gehört in diesem Raum einem anderen Client';
+    case 'ROLE_NOT_INITIATOR':
+      return 'in diesem Fall darf nur die aktuelle Linseninitiative wählen';
+    case 'LENS_ALREADY_SELECTED':
+      return 'für diesen Fall wurde bereits eine gemeinsame Linse festgelegt';
+    case 'LENS_ALREADY_USED':
+      return 'diese Rolle hat diese Linse in dieser Partie bereits verwendet';
+    case 'LENS_NOT_FOUND':
+      return 'diese Linse ist dem Host nicht bekannt';
+    case 'ROUND_MISMATCH':
+      return 'die Runde hat sich inzwischen verändert';
+    default:
+      return reason ?? 'unbekannter Grund';
+  }
 }
 
 function queueMultiplayerVote(option: DecisionOption): void {
@@ -838,6 +928,8 @@ function restoreAcceptedRoundCloseFromSync(roundClose: {
 function handleMultiplayerTransportEvent(event: TransportEvent): void {
   const eventSummary = event.eventName === 'vote-cast'
     ? `${event.roleId} → ${event.optionId} · ${event.voteStatus}`
+    : event.eventName === 'lens-selected'
+      ? `${event.selectedByRoleId} → ${event.lensId} · ${event.selectionStatus}`
     : event.eventName === 'role-claimed'
       ? `${event.roleId} · ${event.claimStatus}`
       : event.eventName === 'round-closed'
@@ -857,6 +949,8 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
       ? getPendingRequestDuration('vote')
       : event.eventName === 'round-closed'
         ? getPendingRequestDuration('round-close')
+        : event.eventName === 'lens-selected'
+          ? getPendingRequestDuration('lens-select')
         : event.eventName === 'role-claimed'
           ? getPendingRequestDuration('role-claim')
           : undefined,
@@ -864,6 +958,16 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
 
   if (event.eventName === 'game-created') {
     setMultiplayerStatus(`Relay-Raum ${event.gameId} aktiv. Rollen koennen jetzt online geclaimt werden.`);
+    return;
+  }
+
+  if (event.eventName === 'game-reset' && event.resetStatus === 'accepted' && event.snapshot) {
+    applyFreshGameReset(event.snapshot.state);
+    setMultiplayerStatus(
+      event.requestedByPlayerId === multiplayer?.playerId
+        ? 'Die Partie wurde für alle im Raum neu gestartet.'
+        : 'Die Partie wurde im Raum neu gestartet. Rollen koennen jetzt neu vergeben werden.'
+    );
     return;
   }
 
@@ -962,6 +1066,24 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
           ? 'Der Host konnte nicht erreicht werden. Prüfe die Relay-Verbindung und versuche es erneut.'
           : 'Kein Host erreichbar – der Raum wurde möglicherweise noch nicht geöffnet oder das Relay ist nicht verbunden.';
       setMultiplayerStatus(`Rollenwahl abgelehnt. ${rejectionHint}`);
+    }
+    return;
+  }
+
+  if (event.eventName === 'lens-selected') {
+    const lensEvent = event;
+
+    if (isAcceptedLensSelection(event)) {
+      if (lensEvent.selectedByPlayerId === multiplayer?.playerId) {
+        clearPendingMultiplayerRequest();
+      }
+      applyAcceptedLensSelection(lensEvent);
+      return;
+    }
+
+    if (lensEvent.selectionStatus === 'rejected' && lensEvent.selectedByPlayerId === multiplayer?.playerId) {
+      clearPendingMultiplayerRequest();
+      setMultiplayerStatus(`Deutungslinse abgelehnt: ${getLensSelectionRejectionReasonLabel(lensEvent.rejectionReason)}.`);
     }
     return;
   }
@@ -1346,6 +1468,7 @@ function startGame(): void {
     selectedRole: state.activeRoles[0] ?? null,
     currentRoleIndex: 0,
     selectedLens: null,
+    phaseTimerBonusSeconds: 0,
   });
 
   if (isMultiplayerMode()) {
@@ -1462,6 +1585,8 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   const canVoteHere = canVoteInCurrentClient();
   const canInteractHere = canInteractWithDecisionCards();
   const localPendingRole = getLocalPendingRole();
+  const lensInitiativeRole = getCurrentLensInitiativeRole();
+  const canChooseLensHere = canCurrentClientChooseLens();
   const queuedVote = getQueuedMultiplayerVote();
   const roundStatusText = isRoundSummaryActive()
     ? `Die Runde wurde host-autoritativ abgeschlossen. Erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`
@@ -1489,6 +1614,22 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   const queueNoticeMarkup = multiplayerQueueNotice
     ? `<div class="decision-queue-reset-note">${multiplayerQueueNotice}</div>`
     : '';
+  const lensGuidance = state.selectedLens
+    ? `Gemeinsame Deutungslinse aktiv: <strong>${state.selectedLens.name}</strong>. +${state.phaseTimerBonusSeconds}s Beratungszeit sind bereits eingerechnet.`
+    : lensInitiativeRole
+      ? isMultiplayerMode()
+        ? canChooseLensHere
+          ? `${lensInitiativeRole.name} darf für diesen Fall die gemeinsame Linse wählen. Bei erfolgreicher Wahl gibt es +${GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds}s.`
+          : `${lensInitiativeRole.name} wählt für diesen Fall die gemeinsame Linse. Danach sehen alle dieselbe Deutung.`
+        : `${lensInitiativeRole.name} eröffnet diesen Fall mit der gemeinsamen Linse. Bei erfolgreicher Wahl gibt es +${GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds}s.`
+      : 'Für diesen Fall ist keine Linseninitiative verfügbar.';
+  const lensInitiativeBanner = lensInitiativeRole
+    ? `<div class="lens-initiative-banner${canChooseLensHere ? ' active' : ''}">
+        <span class="lens-initiative-label">Linseninitiative</span>
+        <strong>${lensInitiativeRole.icon} ${lensInitiativeRole.name}</strong>
+        <span>Bonus bei Wahl: +${state.selectedLens ? state.phaseTimerBonusSeconds : GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds}s</span>
+      </div>`
+    : '';
 
   panel.innerHTML = `
     <div class="scenario-tag ${caseData.tagClass}">${caseData.tag}</div>
@@ -1507,6 +1648,8 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
 
     <div class="linsen-section">
       <div class="panel-title">🔍 Deutungslinse wählen</div>
+      ${lensInitiativeBanner}
+      <div class="decision-guidance">${lensGuidance}</div>
       <div class="linsen-grid" id="linsen-grid-game"></div>
       <div id="linse-effect-box" class="${activeLens ? '' : 'hidden'} linse-effect">
         <div class="linse-effect-title">${activeLens ? `${activeLens.icon} ${activeLens.name}` : ''}</div>
@@ -1554,7 +1697,11 @@ function renderLensGrid(caseData: typeof CASES[0]): void {
   const grid = document.getElementById('linsen-grid-game');
   if (!grid) return;
   grid.innerHTML = '';
+  const initiativeRole = getCurrentLensInitiativeRole();
+  const canChooseLensHere = canCurrentClientChooseLens();
   LENSES.forEach((lens) => {
+    const usedByInitiativeRole = initiativeRole ? hasLensBeenUsedByRole(initiativeRole.id, lens.id) : false;
+    const isLocked = Boolean(state.selectedLens) || usedByInitiativeRole || !canChooseLensHere;
     const card = document.createElement('div');
     card.className = `linse-card${state.selectedLens?.id === lens.id ? ' selected' : ''}`;
     card.tabIndex = 0;
@@ -1562,17 +1709,73 @@ function renderLensGrid(caseData: typeof CASES[0]): void {
       <div class="linse-icon">${lens.icon}</div>
       <div class="linse-name">${lens.name}</div>
       <div class="linse-desc">${lens.desc}</div>
+      <div class="linse-desc">${state.selectedLens?.id === lens.id ? 'Gemeinsame Linse' : usedByInitiativeRole ? 'Von dieser Rolle bereits verwendet' : initiativeRole ? `Initiative: ${initiativeRole.name}` : ''}</div>
     `;
-    card.addEventListener('click', () => selectLens(lens.id, caseData));
-    card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') selectLens(lens.id, caseData); });
+    if (isLocked) {
+      card.style.opacity = state.selectedLens?.id === lens.id ? '1' : '0.55';
+      card.style.cursor = state.selectedLens?.id === lens.id ? 'default' : 'not-allowed';
+    } else {
+      card.addEventListener('click', () => selectLens(lens.id, caseData));
+      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') selectLens(lens.id, caseData); });
+    }
     grid.appendChild(card);
   });
 }
 
 function selectLens(lensId: string, caseData: typeof CASES[0]): void {
   const lens = LENSES.find((l) => l.id === lensId);
+  const initiativeRole = getCurrentLensInitiativeRole();
   if (!lens) return;
-  state = { ...state, selectedLens: lens };
+
+  if (!initiativeRole) {
+    setMultiplayerStatus('Es gibt momentan keine aktive Linseninitiative.');
+    return;
+  }
+
+  if (state.selectedLens) {
+    setMultiplayerStatus(`Für diesen Fall ist ${state.selectedLens.name} bereits als gemeinsame Linse aktiv.`);
+    return;
+  }
+
+  if (hasLensBeenUsedByRole(initiativeRole.id, lens.id)) {
+    setMultiplayerStatus(`${initiativeRole.name} hat ${lens.name} in dieser Partie bereits verwendet.`);
+    return;
+  }
+
+  if (isMultiplayerMode()) {
+    if (!canCurrentClientChooseLens()) {
+      setMultiplayerStatus(`${initiativeRole.name} wählt die gemeinsame Deutungslinse in einer anderen Sitzung.`);
+      return;
+    }
+
+    const runtime = multiplayer;
+    if (!runtime) {
+      return;
+    }
+
+    runMultiplayerRequest({
+      kind: 'lens-select',
+      waitMessage: `Deutungslinse ${lens.name} hängt fest.`,
+      request: () => runtime.selectLens({
+        lensId: lens.id,
+        selectedByRoleId: initiativeRole.id,
+        timerBonusSeconds: GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds,
+      }),
+      errorMessage: 'Deutungslinse konnte nicht übertragen werden.',
+    });
+    setMultiplayerStatus(`Deutungslinse ${lens.name} wird für ${initiativeRole.name} aktiviert. +${GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds}s bei Bestätigung.`);
+    return;
+  }
+
+  state = {
+    ...state,
+    selectedLens: lens,
+    phaseTimerBonusSeconds: GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds,
+    usedLensIdsByRole: {
+      ...state.usedLensIdsByRole,
+      [initiativeRole.id]: Array.from(new Set([...(state.usedLensIdsByRole[initiativeRole.id] ?? []), lens.id])),
+    },
+  };
 
   document.querySelectorAll('.linse-card').forEach((c) => c.classList.remove('selected'));
   document.querySelectorAll<HTMLElement>('.linse-card').forEach((c) => {
@@ -1587,6 +1790,10 @@ function selectLens(lensId: string, caseData: typeof CASES[0]): void {
     text.textContent = caseData.linsenEffekte[lens.id] ?? '';
     box.classList.remove('hidden');
   }
+
+  timerRemaining = getSynchronizedTimerRemaining();
+  updateTimerDisplay();
+  updateSidebar();
 }
 
 // ============================================================
@@ -1835,7 +2042,7 @@ function closeConsequence(): void {
   pendingDecision = null;
   pendingOverlayAction = 'none';
 
-  const lensName = isMultiplayerMode() ? '–' : state.selectedLens?.name ?? '–';
+  const lensName = state.selectedLens?.name ?? '–';
 
   // Effekte über Runden-Abschluss anwenden
   let modifiedEffect = { ...option.effects };
@@ -1858,9 +2065,15 @@ function closeConsequence(): void {
   const result = closeRound(state, modifiedEffect, option.text, lensName);
   if (!result.ok) return;
 
+  const nextLensInitiativeIndex = result.state.activeRoles.length
+    ? (state.lensInitiativeIndex + 1) % result.state.activeRoles.length
+    : 0;
+
   state = resetRoundVotingState({
     ...result.state,
     selectedLens: null,
+    phaseTimerBonusSeconds: 0,
+    lensInitiativeIndex: nextLensInitiativeIndex,
   });
   currentPhaseStartedAt = null;
   timedPhaseKey = null;
@@ -1959,7 +2172,8 @@ function updateTimerDisplay(): void {
   if (!display) return;
 
   display.textContent = String(timerRemaining);
-  const pct = (timerRemaining / DECISION_TIMER_SECONDS) * 100;
+  const totalSeconds = GAMEPLAY_RUNTIME_TIMING.decisionTimerSeconds + state.phaseTimerBonusSeconds;
+  const pct = (timerRemaining / totalSeconds) * 100;
   if (bar) {
     bar.style.width = `${pct}%`;
     bar.style.background =
@@ -2071,19 +2285,28 @@ function updateSidebar(): void {
 
   const currentRoleId = state.selectedRole?.id ?? null;
   const queuedVote = getQueuedMultiplayerVote();
+  const lensInitiativeRole = getCurrentLensInitiativeRole();
   const roundMetaText = isRoundSummaryActive()
     ? `Rundenabschluss bestätigt · ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`
     : `Stimmen in dieser Runde: ${getDisplayedRoundVoteCount()} / ${state.activeRoles.length}${state.tieBreakOptions ? ' · Stichwahl' : ''}`;
+  const lensMetaText = state.selectedLens
+    ? `Gemeinsame Linse: ${state.selectedLens.name} · +${state.phaseTimerBonusSeconds}s`
+    : lensInitiativeRole
+      ? `Linseninitiative: ${lensInitiativeRole.name} · Bonus +${GAMEPLAY_RUNTIME_TIMING.lensSelectionBonusSeconds}s`
+      : 'Keine Linseninitiative aktiv';
 
   const roleRoster = state.activeRoles
     .map((role) => {
       const isCurrentRole = role.id === currentRoleId;
       const isQueuedRole = queuedVote?.roleId === role.id;
       const isOwnedLocally = isLocalOwnedRole(role.id);
+      const isLensInitiativeRole = lensInitiativeRole?.id === role.id;
       const status = state.roundVotes[role.id]
         ? 'abgestimmt'
         : isQueuedRole
           ? 'vorgemerkt'
+        : isLensInitiativeRole && !state.selectedLens
+          ? 'waehlt Linse'
         : isCurrentRole
           ? 'ist am Zug'
           : 'wartet';
@@ -2091,6 +2314,8 @@ function updateSidebar(): void {
         ? 'voted'
         : isQueuedRole
           ? 'queued'
+        : isLensInitiativeRole && !state.selectedLens
+          ? 'initiative'
         : isCurrentRole
           ? 'current'
           : 'waiting';
@@ -2100,6 +2325,9 @@ function updateSidebar(): void {
       const ownerMarkup = isOwnedLocally
         ? '<span class="role-owner-badge">👑 Du</span>'
         : '';
+      const initiativeMarkup = isLensInitiativeRole
+        ? `<span class="role-roster-badge${state.selectedLens ? ' muted' : ''}">🔍 Linseninitiative</span>`
+        : '';
       const abilityMarkup = isCurrentRole
         ? renderRoleAbilityInline(role, isAbilityAvailable(state))
         : '';
@@ -2108,7 +2336,7 @@ function updateSidebar(): void {
           <div class="role-roster-avatar">${role.icon}</div>
           <div class="role-roster-content">
             <div class="role-roster-line">
-              <span class="role-roster-name">${role.name}${ownerMarkup}</span>
+              <span class="role-roster-name">${role.name}${ownerMarkup}${initiativeMarkup}</span>
               <span class="role-roster-status">${status}</span>
             </div>
             <div class="role-roster-perspective">${role.perspective}</div>
@@ -2121,6 +2349,7 @@ function updateSidebar(): void {
 
   el.innerHTML = `
     <div class="sidebar-round-summary">${roundMetaText}</div>
+    <div class="sidebar-round-summary lens-summary">${lensMetaText}</div>
     <div class="role-roster">${roleRoster}</div>
   `;
 }
@@ -2372,23 +2601,23 @@ function showEmergencyEnding(badge: string): void {
 
 function resetGame(): void {
   if (isMultiplayerMode()) {
-    window.location.href = window.location.href;
+    const runtime = multiplayer;
+    if (!runtime) {
+      return;
+    }
+
+    setMultiplayerStatus('Partie-Neustart wird im Raum angefordert.');
+    void runtime.requestGameReset().catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
+      setMultiplayerStatus(`Partie-Neustart fehlgeschlagen. ${detail}`);
+    });
     return;
   }
 
   multiplayer?.destroy();
   multiplayer = null;
-  state = createGame();
-  clearTimer();
-  timerRemaining = DECISION_TIMER_SECONDS;
-  timedCaseIndex = null;
-  timedPhaseKey = null;
-  currentPhaseStartedAt = null;
-  pendingDecision = null;
-  pendingSystemicNotes = [];
-  pendingOverlayAction = 'none';
+  applyFreshGameReset(createGame());
   showScreen('screen-start');
-  initRolesScreen();
 }
 
 // ============================================================
@@ -2438,9 +2667,11 @@ if (MULTIPLAYER_CONFIG) {
     config: MULTIPLAYER_CONFIG,
     rulesVersion: MULTIPLAYER_RULES_VERSION,
     maxPlayers: ROLES.length,
+    validLensIds: LENSES.map((lens) => lens.id),
     validRoleIds: ROLES.map((role) => role.id),
     getCurrentRoundId,
     getAuthoritativeState: () => state,
+    createResetState: () => createGame(),
     getPhaseStartedAt: () => currentPhaseStartedAt,
     onRelayIssue: (message: string) => {
       setMultiplayerStatus(message);
