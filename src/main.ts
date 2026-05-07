@@ -26,6 +26,7 @@ import {
   readMultiplayerUrlConfig,
   RelayMultiplayerRuntime,
 } from './transport/runtime.js';
+import { MULTIPLAYER_TUNING } from './transport/config.js';
 import type { TransportEvent } from './transport/types.js';
 
 // ============================================================
@@ -37,6 +38,7 @@ let pendingSystemicNotes: string[] = [];
 let pendingOverlayAction: 'none' | 'render-case' | 'apply-round' | 'advance-after-round' = 'none';
 const MULTIPLAYER_CONFIG = readMultiplayerUrlConfig(window.location.search);
 const DEVELOPER_MODE = new URLSearchParams(window.location.search).has('dev');
+const MULTIPLAYER_DEBUG_ENABLED = new URLSearchParams(window.location.search).get('debug') === '1';
 const MULTIPLAYER_RULES_VERSION = 'v1';
 
 let multiplayer: RelayMultiplayerRuntime | null = null;
@@ -45,7 +47,7 @@ let multiplayerStatusMessage = MULTIPLAYER_CONFIG
     ? 'Relay-Raum wird vorbereitet.'
     : 'Verbinde mit bestehendem Relay-Raum.'
   : '';
-const MULTIPLAYER_RECOVERY_TIMEOUT_MS = 2500;
+const MULTIPLAYER_RECOVERY_TIMEOUT_MS = MULTIPLAYER_TUNING.recoveryTimeoutMs;
 
 type PendingMultiplayerRequestKind = 'role-claim' | 'vote' | 'round-close';
 
@@ -60,15 +62,30 @@ type QueuedMultiplayerVote = {
 
 type MultiplayerIndicatorTone = 'local' | 'connected' | 'waiting' | 'syncing' | 'error';
 
+type MultiplayerDebugEntry = {
+  id: number;
+  channel: 'out' | 'in' | 'info' | 'error';
+  label: string;
+  detail: string;
+  createdAt: number;
+  durationMs?: number;
+};
+
+const MULTIPLAYER_DEBUG_MAX_ENTRIES = 14;
+
 let pendingMultiplayerRequest:
   | {
       kind: PendingMultiplayerRequestKind;
       timer: ReturnType<typeof setTimeout>;
+      startedAt: number;
+      label: string;
     }
   | null = null;
 
 let queuedMultiplayerVote: QueuedMultiplayerVote | null = null;
 let multiplayerQueueNotice = '';
+let multiplayerDebugEntries: MultiplayerDebugEntry[] = [];
+let multiplayerDebugSequence = 0;
 
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let timerRemaining = DECISION_TIMER_SECONDS;
@@ -231,6 +248,71 @@ function setMultiplayerStatus(message: string): void {
   updateMultiplayerStatusUI();
 }
 
+function pushMultiplayerDebugEntry(entry: Omit<MultiplayerDebugEntry, 'id' | 'createdAt'>): void {
+  multiplayerDebugSequence += 1;
+  multiplayerDebugEntries = [
+    {
+      id: multiplayerDebugSequence,
+      createdAt: Date.now(),
+      ...entry,
+    },
+    ...multiplayerDebugEntries,
+  ].slice(0, MULTIPLAYER_DEBUG_MAX_ENTRIES);
+  updateMultiplayerStatusUI();
+}
+
+function formatMultiplayerDebugTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('de-DE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function getPendingRequestDuration(kind: PendingMultiplayerRequestKind): number | undefined {
+  if (!pendingMultiplayerRequest || pendingMultiplayerRequest.kind !== kind) {
+    return undefined;
+  }
+
+  return Date.now() - pendingMultiplayerRequest.startedAt;
+}
+
+function renderMultiplayerDebugPanel(): void {
+  const rolesPanel = document.getElementById('roles-multiplayer-debug');
+  const gamePanel = document.getElementById('game-multiplayer-debug');
+  const rolesMeta = document.getElementById('roles-multiplayer-debug-meta');
+  const gameMeta = document.getElementById('game-multiplayer-debug-meta');
+  const rolesList = document.getElementById('roles-multiplayer-debug-list');
+  const gameList = document.getElementById('game-multiplayer-debug-list');
+  const showDebug = isMultiplayerMode() && MULTIPLAYER_DEBUG_ENABLED;
+
+  rolesPanel?.classList.toggle('hidden', !showDebug);
+  gamePanel?.classList.toggle('hidden', !showDebug);
+
+  if (!showDebug) {
+    return;
+  }
+
+  const metaText = `Recovery ${MULTIPLAYER_TUNING.recoveryTimeoutMs} ms · Join-Sync ${MULTIPLAYER_TUNING.initialStateSyncDelayMs} ms · ${multiplayer?.isHost ? 'Host' : 'Client'}`;
+  if (rolesMeta) rolesMeta.textContent = metaText;
+  if (gameMeta) gameMeta.textContent = metaText;
+
+  const markup = multiplayerDebugEntries.length
+    ? multiplayerDebugEntries.map((entry) => `
+        <div class="multiplayer-debug-entry ${entry.channel}">
+          <div class="multiplayer-debug-entry-top">
+            <span class="multiplayer-debug-entry-label">${entry.label}</span>
+            <span class="multiplayer-debug-entry-time">${formatMultiplayerDebugTime(entry.createdAt)}${entry.durationMs !== undefined ? ` · ${entry.durationMs} ms` : ''}</span>
+          </div>
+          <div class="multiplayer-debug-entry-detail">${entry.detail}</div>
+        </div>
+      `).join('')
+    : '<div class="multiplayer-debug-empty">Noch keine Multiplayer-Ereignisse erfasst.</div>';
+
+  if (rolesList) rolesList.innerHTML = markup;
+  if (gameList) gameList.innerHTML = markup;
+}
+
 function requestMultiplayerSync(): void {
   if (!multiplayer) {
     return;
@@ -238,9 +320,19 @@ function requestMultiplayerSync(): void {
 
   clearPendingMultiplayerRequest();
   setMultiplayerStatus('Synchronisierung manuell angefordert.');
+  pushMultiplayerDebugEntry({
+    channel: 'info',
+    label: 'Manueller Sync',
+    detail: 'Client fordert einen vollständigen State-Sync beim Host an.',
+  });
   void multiplayer.requestStateSync().catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
     setMultiplayerStatus(`Manuelle Synchronisierung fehlgeschlagen. ${detail}`);
+    pushMultiplayerDebugEntry({
+      channel: 'error',
+      label: 'Sync fehlgeschlagen',
+      detail,
+    });
   });
 }
 
@@ -310,9 +402,18 @@ function startPendingMultiplayerRequest(kind: PendingMultiplayerRequestKind, wai
   clearPendingMultiplayerRequest();
   pendingMultiplayerRequest = {
     kind,
+    startedAt: Date.now(),
+    label: waitMessage,
     timer: setTimeout(() => {
+      const durationMs = pendingMultiplayerRequest ? Date.now() - pendingMultiplayerRequest.startedAt : undefined;
       pendingMultiplayerRequest = null;
       setMultiplayerStatus(`${waitMessage} Keine Bestätigung empfangen. Raum wird neu synchronisiert.`);
+      pushMultiplayerDebugEntry({
+        channel: 'error',
+        label: `${kind} timeout`,
+        detail: `${waitMessage} Keine Bestätigung empfangen, Vollsync wird angefordert.`,
+        durationMs,
+      });
       void multiplayer?.requestStateSync();
     }, MULTIPLAYER_RECOVERY_TIMEOUT_MS),
   };
@@ -325,10 +426,20 @@ function runMultiplayerRequest(params: {
   errorMessage: string;
 }): void {
   startPendingMultiplayerRequest(params.kind, params.waitMessage);
+  pushMultiplayerDebugEntry({
+    channel: 'out',
+    label: `${params.kind} gesendet`,
+    detail: params.waitMessage,
+  });
   void params.request().catch((error: unknown) => {
     clearPendingMultiplayerRequest();
     const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
     setMultiplayerStatus(`${params.errorMessage} ${detail}. Raum wird neu synchronisiert.`);
+    pushMultiplayerDebugEntry({
+      channel: 'error',
+      label: `${params.kind} fehlgeschlagen`,
+      detail,
+    });
     void multiplayer?.requestStateSync();
   });
 }
@@ -363,6 +474,8 @@ function updateMultiplayerStatusUI(): void {
       : 'Kein Relay-Mehrspieler aktiv.';
     indicator.setAttribute('aria-label', indicator.title);
   }
+
+  renderMultiplayerDebugPanel();
 
   if (!roomBox || !roomCode || !inviteLink) {
     return;
@@ -723,12 +836,39 @@ function restoreAcceptedRoundCloseFromSync(roundClose: {
 }
 
 function handleMultiplayerTransportEvent(event: TransportEvent): void {
+  const eventSummary = event.eventName === 'vote-cast'
+    ? `${event.roleId} → ${event.optionId} · ${event.voteStatus}`
+    : event.eventName === 'role-claimed'
+      ? `${event.roleId} · ${event.claimStatus}`
+      : event.eventName === 'round-closed'
+        ? `${event.resolvedOptionId} · ${event.roundCloseStatus}`
+        : event.eventName === 'phase-opened'
+          ? event.snapshot.state.tieBreakOptions
+            ? `Stichwahl ${event.snapshot.state.tieBreakRound}`
+            : 'Spielphase geöffnet'
+          : event.eventName === 'state-sync-sent'
+            ? `Snapshot Fall ${event.snapshot.state.currentCase + 1}`
+            : event.eventName;
+  pushMultiplayerDebugEntry({
+    channel: 'in',
+    label: `Event: ${event.eventName}`,
+    detail: eventSummary,
+    durationMs: event.eventName === 'vote-cast'
+      ? getPendingRequestDuration('vote')
+      : event.eventName === 'round-closed'
+        ? getPendingRequestDuration('round-close')
+        : event.eventName === 'role-claimed'
+          ? getPendingRequestDuration('role-claim')
+          : undefined,
+  });
+
   if (event.eventName === 'game-created') {
     setMultiplayerStatus(`Relay-Raum ${event.gameId} aktiv. Rollen koennen jetzt online geclaimt werden.`);
     return;
   }
 
   if (event.eventName === 'state-sync-sent') {
+    const activeScreenBeforeSync = document.querySelector('.screen.active')?.id;
     clearPendingMultiplayerRequest();
     resetTransientMultiplayerUi();
     state = event.snapshot.state;
@@ -738,7 +878,11 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
     syncRoleSelectionFromOwners();
     updateRoleFlowAfterTransport();
 
-    if (state.activeRoles.length >= 2) {
+    const shouldOpenGameScreen = activeScreenBeforeSync === 'screen-game'
+      || Boolean(event.snapshot.pendingRoundClose)
+      || Boolean(state.selectedRole);
+
+    if (state.activeRoles.length >= 2 && shouldOpenGameScreen) {
       showScreen('screen-game');
       if (event.snapshot.pendingRoundClose) {
         renderCase();
@@ -2300,6 +2444,11 @@ if (MULTIPLAYER_CONFIG) {
     getPhaseStartedAt: () => currentPhaseStartedAt,
     onRelayIssue: (message: string) => {
       setMultiplayerStatus(message);
+      pushMultiplayerDebugEntry({
+        channel: 'error',
+        label: 'Relay-Hinweis',
+        detail: message,
+      });
     },
   });
   multiplayer.onEvent(handleMultiplayerTransportEvent);

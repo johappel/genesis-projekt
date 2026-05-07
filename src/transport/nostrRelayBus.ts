@@ -3,14 +3,15 @@ import { finalizeEvent } from 'nostr-tools/pure';
 import type { Event as NostrEvent, EventTemplate } from 'nostr-tools/pure';
 import type { Filter } from 'nostr-tools/filter';
 
+import { MULTIPLAYER_TUNING } from './config.js';
 import type { TransportEvent, TransportMessageBus } from './types.js';
 import type { EphemeralTransportSession } from './session.js';
 
 export const GENESIS_TRANSPORT_KIND = 1;
 
-const PUBLISH_RETRY_ATTEMPTS = 4;
-const PUBLISH_RETRY_DELAY_MS = 120;
-const SUBSCRIPTION_RETRY_DELAY_MS = 250;
+const PUBLISH_RETRY_ATTEMPTS = MULTIPLAYER_TUNING.publishRetryAttempts;
+const PUBLISH_RETRY_DELAY_MS = MULTIPLAYER_TUNING.publishRetryDelayMs;
+const SUBSCRIPTION_RETRY_DELAY_MS = MULTIPLAYER_TUNING.subscriptionRetryDelayMs;
 
 export interface NostrRelayBusOptions {
   relayUrls: string[];

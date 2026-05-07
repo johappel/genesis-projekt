@@ -1,5 +1,6 @@
 import type { GameState } from '../game/types.js';
 
+import { MULTIPLAYER_TUNING } from './config.js';
 import { TransportEventFactory } from './eventFactory.js';
 import { HostAuthority } from './hostAuthority.js';
 import { NostrRelayBus } from './nostrRelayBus.js';
@@ -13,7 +14,7 @@ import type {
 } from './types.js';
 
 const DEFAULT_RELAY_URL = 'http://localhost:7000/';
-const REQUEST_SYNC_DELAY_MS = 120;
+const REQUEST_SYNC_DELAY_MS = MULTIPLAYER_TUNING.initialStateSyncDelayMs;
 
 export function formatRelayIssueMessage(relayUrl: string, detail?: string): string {
   const normalizedDetail = detail?.trim();
@@ -26,6 +27,10 @@ export interface MultiplayerUrlConfig {
   mode: 'host' | 'join';
   gameId: string;
   relayUrl: string;
+}
+
+function getSessionPersistenceKey(config: MultiplayerUrlConfig): string {
+  return `genesis:transport-session:${config.mode}:${config.gameId}:${config.relayUrl}`;
 }
 
 export interface RelayMultiplayerRuntimeOptions {
@@ -103,7 +108,10 @@ export class RelayMultiplayerRuntime {
     this.getAuthoritativeState = options.getAuthoritativeState;
     this.getPhaseStartedAt = options.getPhaseStartedAt;
     this.onRelayIssue = options.onRelayIssue;
-    this.session = createEphemeralTransportSession(options.config.mode === 'host');
+    this.session = createEphemeralTransportSession(
+      options.config.mode === 'host',
+      getSessionPersistenceKey(options.config),
+    );
     this.bus = new NostrRelayBus({
       relayUrls: [options.config.relayUrl],
       session: this.session,

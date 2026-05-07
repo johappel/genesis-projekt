@@ -219,6 +219,96 @@ describe('LocalBus', () => {
     bus.destroy();
   });
 
+  it('sendet nach einer akzeptierten Stimme schnell einen Follow-up-State-Sync', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerSession = createEphemeralTransportSession(false);
+    const hostRole = ROLES.find((role) => role.id === 'theologin');
+    const nextRole = ROLES.find((role) => role.id === 'juristin');
+    if (!hostRole || !nextRole) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const joinerFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerSession.clientInfo,
+    });
+    let hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [hostRole, nextRole],
+        selectedRole: hostRole,
+        currentRoleIndex: 0,
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {
+        theologin: joinerSession.clientInfo.playerId,
+      },
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(joinerFactory.createVoteCastRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      phaseKey: 'round-0:base',
+      roleId: 'theologin',
+      optionId: 'sophia-1-a',
+      isTieBreak: false,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    hostSnapshot = {
+      ...hostSnapshot,
+      state: {
+        ...hostSnapshot.state,
+        roundVotes: {
+          theologin: 'sophia-1-a',
+        },
+        selectedRole: nextRole,
+        currentRoleIndex: 1,
+      },
+    };
+
+    const followupSync = received.findLast(
+      (event) => event.eventName === 'state-sync-sent' && event.snapshot.state.roundVotes.theologin === 'sophia-1-a'
+    );
+
+    expect(followupSync).toMatchObject({
+      eventName: 'state-sync-sent',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+      snapshot: {
+        state: {
+          roundVotes: {
+            theologin: 'sophia-1-a',
+          },
+        },
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
   it('liefert bei state-sync auch einen akzeptierten Rundenabschluss zurueck', async () => {
     const bus = new LocalBus();
     const hostSession = createEphemeralTransportSession(true);

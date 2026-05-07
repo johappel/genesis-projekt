@@ -1,5 +1,6 @@
 import { TransportEventFactory } from './eventFactory.js';
 import { getNextPendingRole, haveAllActiveRolesVoted } from '../game/engine/voting.js';
+import { MULTIPLAYER_TUNING } from './config.js';
 import type { EphemeralTransportSession } from './session.js';
 import type {
   PendingRoundCloseState,
@@ -47,6 +48,8 @@ export class HostAuthority {
   private readonly closedRounds = new Set<string>();
 
   private unsubscribe: (() => void) | null = null;
+
+  private pendingStateSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: HostAuthorityOptions) {
     this.bus = options.bus;
@@ -154,6 +157,10 @@ export class HostAuthority {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    if (this.pendingStateSyncTimer !== null) {
+      clearTimeout(this.pendingStateSyncTimer);
+      this.pendingStateSyncTimer = null;
+    }
   }
 
   private getMergedSnapshot(): StateSnapshot {
@@ -207,6 +214,9 @@ export class HostAuthority {
     });
 
     await this.bus.publish(response);
+    if (resolution.claimStatus === 'accepted') {
+      this.scheduleFollowupStateSync();
+    }
   }
 
   private async handleVoteCastRequested(event: VoteCastEvent): Promise<void> {
@@ -224,6 +234,9 @@ export class HostAuthority {
     });
 
     await this.bus.publish(response);
+    if (resolution.voteStatus === 'accepted') {
+      this.scheduleFollowupStateSync();
+    }
   }
 
   private async handleRoundClosedRequested(event: RoundClosedEvent): Promise<void> {
@@ -240,6 +253,29 @@ export class HostAuthority {
     });
 
     await this.bus.publish(response);
+    if (resolution.roundCloseStatus === 'accepted') {
+      this.scheduleFollowupStateSync();
+    }
+  }
+
+  private scheduleFollowupStateSync(): void {
+    if (!MULTIPLAYER_TUNING.followupStateSyncEnabled) {
+      return;
+    }
+
+    if (this.pendingStateSyncTimer !== null) {
+      clearTimeout(this.pendingStateSyncTimer);
+    }
+
+    this.pendingStateSyncTimer = setTimeout(() => {
+      this.pendingStateSyncTimer = null;
+      void this.bus.publish(
+        this.eventFactory.createStateSyncSent({
+          roundId: this.getCurrentRoundId(),
+          snapshot: this.getMergedSnapshot(),
+        })
+      );
+    }, MULTIPLAYER_TUNING.followupStateSyncDelayMs);
   }
 
   private resolveRoleClaim(event: RoleClaimedEvent): {

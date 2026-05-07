@@ -162,6 +162,13 @@
             </label>
           </div>
           <div id="roles-multiplayer-status" style="font-size:0.82em;color:var(--text-dim)">Kein Relay-Mehrspieler aktiv.</div>
+          <div id="roles-multiplayer-debug" class="multiplayer-debug-panel hidden">
+            <div class="multiplayer-debug-header">
+              <span>🧪 Multiplayer-Debug</span>
+              <span id="roles-multiplayer-debug-meta" class="multiplayer-debug-meta"></span>
+            </div>
+            <div id="roles-multiplayer-debug-list" class="multiplayer-debug-list"></div>
+          </div>
         </div>
         <div class="roles-info-actions">
           <button class="btn btn-secondary roles-info-btn" type="button" onclick="reopenGameIntro()">Worum geht es in dem Spiel</button>
@@ -228,6 +235,11 @@
             <div id="protocol-list">
               <div style="font-size:0.82em;color:var(--text-dim)">Noch keine Entscheidungen getroffen.</div>
             </div>
+          </div>
+          <div id="game-multiplayer-debug" class="sidebar-panel hidden">
+            <div class="sidebar-title">🧪 Multiplayer-Debug</div>
+            <div id="game-multiplayer-debug-meta" class="multiplayer-debug-meta" style="margin-bottom:8px"></div>
+            <div id="game-multiplayer-debug-list" class="multiplayer-debug-list"></div>
           </div>
         </div>
       </div>
