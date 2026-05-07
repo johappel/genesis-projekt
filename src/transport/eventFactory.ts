@@ -1,5 +1,6 @@
 import type {
   GameCreatedEvent,
+  PhaseOpenedEvent,
   RoundClosedEvent,
   RoleClaimedEvent,
   StateSnapshot,
@@ -42,6 +43,17 @@ export class TransportEventFactory {
     };
   }
 
+  createPhaseOpened(params: {
+    roundId: string;
+    snapshot: StateSnapshot;
+  }): PhaseOpenedEvent {
+    return {
+      ...this.createEnvelope<'phase-opened'>('phase-opened', params.roundId),
+      authoritativePlayerId: this.clientInfo.playerId,
+      snapshot: params.snapshot,
+    };
+  }
+
   createRoleClaimRequested(params: {
     roundId: string;
     roleId: string;
@@ -74,6 +86,7 @@ export class TransportEventFactory {
   createVoteCastRequested(params: {
     roundId: string;
     caseId: number;
+    phaseKey?: string;
     roleId: string;
     optionId: string;
     isTieBreak: boolean;
@@ -81,6 +94,7 @@ export class TransportEventFactory {
     return {
       ...this.createEnvelope<'vote-cast'>('vote-cast', params.roundId),
       caseId: params.caseId,
+      phaseKey: params.phaseKey ?? getDefaultPhaseKey(params.roundId, params.isTieBreak),
       roleId: params.roleId,
       optionId: params.optionId,
       isTieBreak: params.isTieBreak,
@@ -91,6 +105,7 @@ export class TransportEventFactory {
   createVoteCastResolved(params: {
     roundId: string;
     caseId: number;
+    phaseKey?: string;
     roleId: string;
     optionId: string;
     claimedByPlayerId: string;
@@ -102,6 +117,7 @@ export class TransportEventFactory {
       ...this.createEnvelope<'vote-cast'>('vote-cast', params.roundId),
       playerId: params.claimedByPlayerId,
       caseId: params.caseId,
+      phaseKey: params.phaseKey ?? getDefaultPhaseKey(params.roundId, params.isTieBreak),
       roleId: params.roleId,
       optionId: params.optionId,
       isTieBreak: params.isTieBreak,
@@ -114,12 +130,14 @@ export class TransportEventFactory {
   createRoundClosedRequested(params: {
     roundId: string;
     caseId: number;
+    phaseKey?: string;
     resolvedOptionId: string;
     voteSummary: RoundClosedEvent['voteSummary'];
   }): RoundClosedEvent {
     return {
       ...this.createEnvelope<'round-closed'>('round-closed', params.roundId),
       caseId: params.caseId,
+      phaseKey: params.phaseKey ?? getDefaultPhaseKey(params.roundId, false),
       resolvedOptionId: params.resolvedOptionId,
       closedByPlayerId: this.clientInfo.playerId,
       voteSummary: params.voteSummary,
@@ -130,6 +148,7 @@ export class TransportEventFactory {
   createRoundClosedResolved(params: {
     roundId: string;
     caseId: number;
+    phaseKey?: string;
     resolvedOptionId: string;
     closedByPlayerId: string;
     voteSummary: RoundClosedEvent['voteSummary'];
@@ -140,6 +159,7 @@ export class TransportEventFactory {
       ...this.createEnvelope<'round-closed'>('round-closed', params.roundId),
       playerId: params.closedByPlayerId,
       caseId: params.caseId,
+      phaseKey: params.phaseKey ?? getDefaultPhaseKey(params.roundId, false),
       resolvedOptionId: params.resolvedOptionId,
       closedByPlayerId: params.closedByPlayerId,
       voteSummary: params.voteSummary,
@@ -190,4 +210,8 @@ export class TransportEventFactory {
       protocolVersion: 1,
     };
   }
+}
+
+function getDefaultPhaseKey(roundId: string, isTieBreak: boolean): string {
+  return isTieBreak ? `${roundId}:tie-break-1` : `${roundId}:base`;
 }

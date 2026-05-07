@@ -2,6 +2,7 @@ import type { GameState } from '../game/types.js';
 
 export type TransportEventName =
   | 'game-created'
+  | 'phase-opened'
   | 'role-claimed'
   | 'vote-cast'
   | 'round-closed'
@@ -17,6 +18,7 @@ export interface TransportEnvelope {
   seq: number;
   sentAt: number;
   actorPubkey: string;
+  messageId?: string;
   protocolVersion: 1;
 }
 
@@ -37,6 +39,7 @@ export interface StateSnapshot {
   state: GameState;
   lastAppliedSeqByPlayer: Record<string, number>;
   roleOwners: Record<string, string>;
+  phaseStartedAt?: number | null;
   pendingRoundClose?: PendingRoundCloseState | null;
 }
 
@@ -45,6 +48,12 @@ export interface GameCreatedEvent extends TransportEnvelope {
   hostPlayerId: string;
   rulesVersion: string;
   maxPlayers: number;
+}
+
+export interface PhaseOpenedEvent extends TransportEnvelope {
+  eventName: 'phase-opened';
+  authoritativePlayerId: string;
+  snapshot: StateSnapshot;
 }
 
 export interface RoleClaimedEvent extends TransportEnvelope {
@@ -59,6 +68,7 @@ export interface RoleClaimedEvent extends TransportEnvelope {
 export interface VoteCastEvent extends TransportEnvelope {
   eventName: 'vote-cast';
   caseId: number;
+  phaseKey: string;
   roleId: string;
   optionId: string;
   isTieBreak: boolean;
@@ -70,6 +80,7 @@ export interface VoteCastEvent extends TransportEnvelope {
 export interface RoundClosedEvent extends TransportEnvelope {
   eventName: 'round-closed';
   caseId: number;
+  phaseKey: string;
   resolvedOptionId: string;
   closedByPlayerId: string;
   voteSummary: VoteSummaryEntry[];
@@ -99,6 +110,7 @@ export interface StateSyncSentEvent extends TransportEnvelope {
 
 export type TransportEvent =
   | GameCreatedEvent
+  | PhaseOpenedEvent
   | RoleClaimedEvent
   | VoteCastEvent
   | RoundClosedEvent

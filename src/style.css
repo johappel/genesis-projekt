@@ -98,6 +98,8 @@ body{
 .role-icon-lg{font-size:2.4em;margin-bottom:8px}
 .role-title{font-size:1.05em;font-weight:bold;color:var(--gold);margin-bottom:6px}
 .role-ability{font-size:0.82em;color:#7fb3e8;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+.roles-info-actions{display:flex;justify-content:flex-start;margin-bottom:14px}
+.roles-info-btn{font-size:0.86em;padding:10px 16px}
 
 /* ---------- GAME HEADER ---------- */
 .game-header{
@@ -288,7 +290,7 @@ body{
 }
 .role-roster-content{min-width:0;flex:1 1 auto}
 .role-roster-line{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:4px}
-.role-roster-name{font-weight:700;color:#f3f4f8;line-height:1.35}
+.role-roster-name{font-weight:700;color:#f3f4f8;line-height:1.35;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .role-roster-status{white-space:nowrap;font-size:0.72em}
 .role-roster-perspective{color:var(--text-dim);font-size:0.72em;line-height:1.45}
 .role-roster-item.current{border-color:#7fb3e8;color:#d9efff;box-shadow:0 0 0 1px rgba(127,179,232,0.1),0 14px 24px rgba(18,31,62,0.34);animation:current-border-blink 0.48s ease-in-out 3}
@@ -297,7 +299,13 @@ body{
 .role-roster-item.voted .role-roster-avatar{border-color:rgba(245,166,35,0.35);background:rgba(245,166,35,0.12)}
 .role-roster-item.queued{border-color:rgba(127,179,232,0.32);color:#d9efff;box-shadow:0 0 0 1px rgba(127,179,232,0.08)}
 .role-roster-item.queued .role-roster-avatar{border-color:rgba(127,179,232,0.4);background:rgba(127,179,232,0.14)}
+.role-roster-item.own-role{border-color:rgba(245,166,35,0.35);box-shadow:0 0 0 1px rgba(245,166,35,0.08)}
 .role-roster-item.waiting{color:var(--text-dim)}
+.role-owner-badge{
+  display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
+  font-size:0.66em;font-weight:700;letter-spacing:0.03em;text-transform:uppercase;
+  color:#f7dfab;background:rgba(245,166,35,0.14);border:1px solid rgba(245,166,35,0.26);
+}
 .role-roster-queue-note{
   margin-top:6px;font-size:0.69em;line-height:1.45;color:#d9efff;
   padding:6px 8px;border-radius:9px;background:rgba(127,179,232,0.1);border:1px solid rgba(127,179,232,0.18);

@@ -16,6 +16,7 @@ export function createGame(): GameState {
     roundVotes: {},
     councilPreVoteOptionId: null,
     tieBreakOptions: null,
+    tieBreakRound: 0,
     abilities: {
       usedGlobalByRole: {},
       usedCaseAbilities: {},

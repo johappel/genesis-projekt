@@ -129,6 +129,7 @@ export interface GameState {
   roundVotes: Record<string, string>;
   councilPreVoteOptionId: string | null;
   tieBreakOptions: string[] | null;
+  tieBreakRound: number;
   abilities: AbilityState;
   protokoll: ProtocolEntry[];
   linsenUsed: Record<string, number>;

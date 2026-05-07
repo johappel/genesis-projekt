@@ -101,6 +101,7 @@ export function beginTieBreak(state: GameState, optionIds: string[]): GameState 
     roundVotes: {},
     councilPreVoteOptionId: null,
     tieBreakOptions: [...optionIds],
+    tieBreakRound: state.tieBreakRound + 1,
     currentRoleIndex: 0,
     selectedRole: state.activeRoles[0] ?? null,
   };
@@ -112,6 +113,7 @@ export function resetRoundVotingState(state: GameState): GameState {
     roundVotes: {},
     councilPreVoteOptionId: null,
     tieBreakOptions: null,
+    tieBreakRound: 0,
     currentRoleIndex: 0,
     selectedRole: state.activeRoles[0] ?? null,
   };

@@ -73,6 +73,8 @@ let multiplayerQueueNotice = '';
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let timerRemaining = DECISION_TIMER_SECONDS;
 let timedCaseIndex: number | null = null;
+let timedPhaseKey: string | null = null;
+let currentPhaseStartedAt: number | null = null;
 
 function formatEffectTags(effect: Record<string, number>, kind: 'decision' | 'overlay'): string {
   return Object.entries(effect)
@@ -148,7 +150,33 @@ function isCurrentRoleOwnedLocally(): boolean {
 }
 
 function getCurrentVotePhaseKey(): string {
-  return `${getCurrentRoundId()}:${state.tieBreakOptions ? 'tie-break' : 'base'}`;
+  return state.tieBreakOptions
+    ? `${getCurrentRoundId()}:tie-break-${state.tieBreakRound}`
+    : `${getCurrentRoundId()}:base`;
+}
+
+function hasOpenMultiplayerPhase(): boolean {
+  return Boolean(state.selectedRole || pendingDecision || state.tieBreakOptions);
+}
+
+function isLocalOwnedRole(roleId: string | null): boolean {
+  return Boolean(roleId && multiplayer?.ownsRole(roleId));
+}
+
+function markPhaseStarted(startedAt = Date.now()): void {
+  currentPhaseStartedAt = startedAt;
+  timedCaseIndex = state.currentCase;
+  timedPhaseKey = getCurrentVotePhaseKey();
+  timerRemaining = DECISION_TIMER_SECONDS;
+}
+
+function getSynchronizedTimerRemaining(): number {
+  if (!currentPhaseStartedAt) {
+    return DECISION_TIMER_SECONDS;
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - currentPhaseStartedAt) / 1000));
+  return Math.max(0, DECISION_TIMER_SECONDS - elapsedSeconds);
 }
 
 function getLocalOwnedRole(): typeof ROLES[number] | null {
@@ -243,6 +271,8 @@ function getMultiplayerIndicatorState(): { tone: MultiplayerIndicatorTone; label
     lowerStatus.includes('abgelehnt')
     || lowerStatus.includes('fehlgeschlagen')
     || lowerStatus.includes('keine bestätigung')
+    || lowerStatus.includes('nicht erreichbar')
+    || lowerStatus.includes('relay-server')
   ) {
     return {
       tone: 'error',
@@ -314,9 +344,13 @@ function updateMultiplayerStatusUI(): void {
 
   if (startStatus) {
     startStatus.textContent = multiplayerStatusMessage || 'Kein Relay-Mehrspieler aktiv.';
+    const isError = getMultiplayerIndicatorState().tone === 'error';
+    startStatus.style.color = isError ? 'var(--highlight)' : 'var(--text-dim)';
   }
   if (rolesStatus) {
     rolesStatus.textContent = multiplayerStatusMessage || 'Kein Relay-Mehrspieler aktiv.';
+    const isError = getMultiplayerIndicatorState().tone === 'error';
+    rolesStatus.style.color = isError ? 'var(--highlight)' : 'var(--text-dim)';
   }
 
   if (indicator && indicatorLabel) {
@@ -363,6 +397,27 @@ function resetTransientMultiplayerUi(): void {
   document.getElementById('consequence-overlay')?.classList.add('hidden');
 }
 
+function publishOpenedPhase(statusMessage: string): void {
+  const runtime = multiplayer;
+  if (!runtime?.isHost) {
+    return;
+  }
+
+  markPhaseStarted();
+  setMultiplayerStatus(statusMessage);
+  showScreen('screen-game');
+  renderCase();
+  void runtime.openPhase().catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
+    setMultiplayerStatus(`Neue Phase konnte nicht verteilt werden. ${detail}. Raum wird neu synchronisiert.`);
+    void runtime.requestStateSync();
+  });
+  void runtime.broadcastStateSync().catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : 'Unbekannter Relay-Fehler';
+    setMultiplayerStatus(`Phase wurde geoeffnet, aber der Folgesync konnte nicht verteilt werden. ${detail}`);
+  });
+}
+
 function canVoteInCurrentClient(): boolean {
   return (!isMultiplayerMode() || isCurrentRoleOwnedLocally()) && !isAwaitingVoteConfirmation();
 }
@@ -378,6 +433,21 @@ function canInteractWithDecisionCards(): boolean {
   }
 
   return !(state.selectedRole?.id === localPendingRole.id && isAwaitingVoteConfirmation());
+}
+
+function getRoleRejectionReasonLabel(reason: string): string {
+  switch (reason) {
+    case 'ROLE_NOT_FOUND':
+      return 'Diese Rolle existiert im Raum nicht.';
+    case 'ROLE_ALREADY_TAKEN':
+      return 'Diese Rolle ist bereits von jemand anderem belegt.';
+    case 'GAME_FULL':
+      return 'Der Raum ist bereits voll.';
+    case 'PLAYER_ALREADY_HAS_ROLE':
+      return 'Du hast in diesem Raum bereits eine Rolle.';
+    default:
+      return `Unbekannter Ablehnungsgrund (${reason}). Prüfe die Relay-Verbindung.`;
+  }
 }
 
 function getVoteRejectionReasonLabel(reason?: string): string {
@@ -410,6 +480,7 @@ function submitMultiplayerVote(option: DecisionOption, source: 'manual' | 'queue
     waitMessage: `Stimme fuer ${option.text} haengt fest.`,
     request: () => runtime.castVote({
       caseId: state.currentCase + 1,
+      phaseKey: getCurrentVotePhaseKey(),
       roleId: selectedRole.id,
       optionId: option.id,
       isTieBreak: Boolean(state.tieBreakOptions),
@@ -580,6 +651,16 @@ function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cas
   }
 
   if (roundDecision.status === 'tie-break') {
+    if (isMultiplayerMode()) {
+      if (multiplayer?.isHost) {
+        state = beginTieBreak(state, roundDecision.optionIds);
+        showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
+      } else {
+        setMultiplayerStatus('Gleichstand erkannt. Warte auf die host-autoritative Stichwahlphase.');
+      }
+      return;
+    }
+
     state = beginTieBreak(state, roundDecision.optionIds);
     showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
     return;
@@ -596,6 +677,7 @@ function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cas
       waitMessage: 'Rundenabschluss hängt fest.',
       request: () => runtime.closeRound({
         caseId: event.caseId,
+        phaseKey: getCurrentVotePhaseKey(),
         resolvedOptionId: roundDecision.optionId,
         voteSummary: buildRoundVoteSummary(),
       }),
@@ -650,6 +732,9 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
     clearPendingMultiplayerRequest();
     resetTransientMultiplayerUi();
     state = event.snapshot.state;
+    currentPhaseStartedAt = event.snapshot.phaseStartedAt ?? null;
+    timedCaseIndex = currentPhaseStartedAt !== null ? state.currentCase : null;
+    timedPhaseKey = currentPhaseStartedAt !== null ? getCurrentVotePhaseKey() : null;
     syncRoleSelectionFromOwners();
     updateRoleFlowAfterTransport();
 
@@ -660,7 +745,13 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
         restoreAcceptedRoundCloseFromSync(event.snapshot.pendingRoundClose);
       } else if (state.selectedRole) {
         renderCase();
+      } else if (isMultiplayerMode()) {
+        renderWaitingForMultiplayerStart();
       }
+    }
+
+    if (multiplayer?.isHost && event.authoritativePlayerId === multiplayer.playerId) {
+      return;
     }
 
     setMultiplayerStatus(
@@ -669,6 +760,34 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
         : isCurrentRoleOwnedLocally()
         ? `State-Sync empfangen. Du bist jetzt am Zug.`
         : `State-Sync empfangen. Raum ${event.gameId} ist bereit.`
+    );
+    return;
+  }
+
+  if (event.eventName === 'phase-opened') {
+    resetTransientMultiplayerUi();
+    const previousHadTieBreak = Boolean(state.tieBreakOptions);
+    const hadQueuedVote = Boolean(getQueuedMultiplayerVote());
+    state = event.snapshot.state;
+    currentPhaseStartedAt = event.snapshot.phaseStartedAt ?? null;
+    timedCaseIndex = currentPhaseStartedAt !== null ? state.currentCase : null;
+    timedPhaseKey = currentPhaseStartedAt !== null ? getCurrentVotePhaseKey() : null;
+    syncRoleSelectionFromOwners();
+
+    if (!previousHadTieBreak && state.tieBreakOptions) {
+      multiplayerQueueNotice = hadQueuedVote
+        ? 'Die alte Vormerkung wurde fuer die Stichwahl verworfen. Bitte waehle zwischen den verbleibenden Optionen neu.'
+        : 'Die Stichwahl ist gestartet. Bitte waehle jetzt nur noch zwischen den verbleibenden Optionen.';
+    }
+
+    showScreen('screen-game');
+    renderCase();
+    setMultiplayerStatus(
+      state.tieBreakOptions
+        ? 'Die host-autoritative Stichwahlphase ist offen.'
+        : isCurrentRoleOwnedLocally()
+          ? 'Die host-autoritative Spielphase ist offen. Du bist dran oder kannst vormerken.'
+          : 'Die host-autoritative Spielphase ist offen. Du kannst deine Rolle erkennen und bei Bedarf vormerken.'
     );
     return;
   }
@@ -691,9 +810,14 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
       return;
     }
 
-    if (roleEvent.claimedByPlayerId === multiplayer?.playerId) {
+    if (roleEvent.claimStatus === 'rejected' && roleEvent.claimedByPlayerId === multiplayer?.playerId) {
       clearPendingMultiplayerRequest();
-      setMultiplayerStatus(`Rollenwahl abgelehnt: ${roleEvent.rejectionReason ?? 'unbekannter Grund'}.`);
+      const rejectionHint = roleEvent.rejectionReason
+        ? getRoleRejectionReasonLabel(roleEvent.rejectionReason)
+        : multiplayerStatusMessage.toLowerCase().includes('nicht erreichbar')
+          ? 'Der Host konnte nicht erreicht werden. Prüfe die Relay-Verbindung und versuche es erneut.'
+          : 'Kein Host erreichbar – der Raum wurde möglicherweise noch nicht geöffnet oder das Relay ist nicht verbunden.';
+      setMultiplayerStatus(`Rollenwahl abgelehnt. ${rejectionHint}`);
     }
     return;
   }
@@ -709,9 +833,14 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
       return;
     }
 
-    if (voteEvent.playerId === multiplayer?.playerId) {
+    if (voteEvent.voteStatus === 'rejected' && voteEvent.playerId === multiplayer?.playerId) {
       clearPendingMultiplayerRequest();
       queuedMultiplayerVote = null;
+      if (voteEvent.rejectionReason === 'ALREADY_VOTED') {
+        setMultiplayerStatus('Deine Stimme war beim Host bereits erfasst. Synchronisierung wird nachgezogen.');
+        void multiplayer?.requestStateSync();
+        return;
+      }
       setMultiplayerStatus(`Stimme abgelehnt: ${getVoteRejectionReasonLabel(voteEvent.rejectionReason)}.`);
     }
     return;
@@ -727,7 +856,7 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
       return;
     }
 
-    if (multiplayer?.isHost) {
+    if (roundCloseEvent.roundCloseStatus === 'rejected' && multiplayer?.isHost) {
       clearPendingMultiplayerRequest();
       setMultiplayerStatus(`Rundenabschluss abgelehnt: ${roundCloseEvent.rejectionReason ?? 'unbekannter Grund'}.`);
     }
@@ -803,7 +932,10 @@ function getRoundStatusLabel(): string {
     return `Runde abgeschlossen · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen`;
   }
 
-  return `Am Zug: ${state.selectedRole?.name ?? '–'} · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen${state.tieBreakOptions ? ' · Stichwahl' : ''}${DEVELOPER_MODE ? ' · DEV' : ''}`;
+  const currentRoleName = state.selectedRole?.name
+    ? `${isLocalOwnedRole(state.selectedRole.id) ? '👑 ' : ''}${state.selectedRole.name}`
+    : '–';
+  return `Am Zug: ${currentRoleName} · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen${state.tieBreakOptions ? ' · Stichwahl' : ''}${DEVELOPER_MODE ? ' · DEV' : ''}`;
 }
 
 function ensureCouncilPreVote(): void {
@@ -854,7 +986,10 @@ function getRoleSelectionHint(): string {
       const suffix = multiplayer?.ownsRole(role.id) ? ' (du)' : '';
       return `${role.name}${suffix}`;
     }).join(', ');
-    return `${state.activeRoles.length} Online-Rollen aktiv: ${names}.`;
+    const hostHint = multiplayer?.isHost
+      ? ' Nur der Host startet die Partie fuer alle.'
+      : ' Warte auf den Host; der Spielstart wird fuer alle gleichzeitig geoeffnet.';
+    return `${state.activeRoles.length} Online-Rollen aktiv: ${names}.${hostHint}`;
   }
 
   if (!state.activeRoles.length) {
@@ -892,8 +1027,20 @@ function updateRoleSelectionUI(): void {
   });
 
   const btn = document.getElementById('btn-start-game') as HTMLButtonElement | null;
+  const clientWaitHint = document.getElementById('client-wait-hint');
   const hint = document.getElementById('role-hint');
-  if (btn) btn.disabled = state.activeRoles.length < 2;
+  const isClient = isMultiplayerMode() && !multiplayer?.isHost;
+  if (btn) {
+    btn.disabled = state.activeRoles.length < 2;
+    btn.textContent = isMultiplayerMode()
+      ? isClient
+        ? '🎮 Spiel lokal öffnen'
+        : '🎮 Spiel für alle starten'
+      : '🎮 Spiel starten';
+  }
+  if (clientWaitHint) {
+    clientWaitHint.classList.toggle('hidden', !isClient);
+  }
   if (hint) hint.textContent = getRoleSelectionHint();
 }
 
@@ -947,8 +1094,11 @@ function showNextRoundPrompt(): void {
   if (isMultiplayerMode()) {
     multiplayerQueueNotice = '';
     if (nextCase) {
-      setMultiplayerStatus(`Naechster Fall offen: ${nextCase.title}. Du kannst fuer deine Rolle sofort wieder vormerken.`);
-      renderCase();
+      if (multiplayer?.isHost) {
+        publishOpenedPhase(`Naechster Fall offen: ${nextCase.title}. Alle Clients wechseln jetzt gemeinsam in die neue Runde.`);
+      } else {
+        setMultiplayerStatus(`Warte auf den Host, der ${nextCase.title} fuer alle freigibt.`);
+      }
       return;
     }
 
@@ -1029,6 +1179,23 @@ function selectRole(roleId: string): void {
 // SPIELSTART
 // ============================================================
 function startGame(): void {
+  const runtime = multiplayer;
+  if (isMultiplayerMode() && runtime && !runtime.isHost) {
+    setMultiplayerStatus(
+      hasOpenMultiplayerPhase()
+        ? 'Lokale Partieansicht wird geöffnet und mit dem Host synchronisiert.'
+        : 'Lokale Partieansicht wird vorbereitet. Sobald der Host die Runde öffnet, wechselst du automatisch hinein.'
+    );
+    showScreen('screen-game');
+    if (hasOpenMultiplayerPhase()) {
+      renderCase();
+    } else {
+      renderWaitingForMultiplayerStart();
+    }
+    void runtime.requestStateSync();
+    return;
+  }
+
   if (state.activeRoles.length < 2) return;
   state = resetRoundVotingState({
     ...state,
@@ -1036,18 +1203,14 @@ function startGame(): void {
     currentRoleIndex: 0,
     selectedLens: null,
   });
-  showScreen('screen-game');
-  updateSidebar();
 
   if (isMultiplayerMode()) {
-    setMultiplayerStatus(
-      isCurrentRoleOwnedLocally()
-        ? 'Die Runde ist offen. Du kannst sofort abstimmen.'
-        : 'Die Runde ist offen. Du kannst fuer deine Rolle schon jetzt eine Entscheidung vormerken.'
-    );
-    renderCase();
+    publishOpenedPhase('Die Runde ist offen. Der Host hat den ersten Fall fuer alle gestartet.');
     return;
   }
+
+  showScreen('screen-game');
+  updateSidebar();
 
   showCurrentTurnPrompt('Die erste Ratsstimme beginnt jetzt. Nach OK wird der aktuelle Fall eingeblendet.');
 }
@@ -1060,6 +1223,11 @@ function renderCase(): void {
   if (!caseData) {
     // Alle Fälle gespielt → Finale
     showScreen('screen-finale');
+    return;
+  }
+
+  if (isMultiplayerMode() && !hasOpenMultiplayerPhase()) {
+    renderWaitingForMultiplayerStart();
     return;
   }
 
@@ -1082,7 +1250,7 @@ function renderCase(): void {
   if (maybeAutoSubmitQueuedVote(caseData)) {
     return;
   }
-  if (canVoteInCurrentClient()) {
+  if ((isMultiplayerMode() && !isRoundSummaryActive()) || canVoteInCurrentClient()) {
     startDecisionTimer(caseData);
   } else {
     clearTimer();
@@ -1101,6 +1269,35 @@ function renderCase(): void {
     showEmergencyEnding(emergencyBadge);
     return;
   }
+}
+
+function renderWaitingForMultiplayerStart(): void {
+  clearTimer();
+
+  const caseData = CASES[state.currentCase];
+  const phaseEl = document.getElementById('phase-indicator');
+  const roleDisp = document.getElementById('current-role-display');
+  const progressFill = document.getElementById('progress-fill');
+  const panel = document.getElementById('scenario-panel');
+  if (!panel) return;
+
+  if (phaseEl) phaseEl.textContent = `Fall ${state.currentCase + 1} von ${CASES.length}`;
+  if (roleDisp) roleDisp.textContent = 'Warte auf den Host · Phase noch nicht geöffnet';
+  if (progressFill) progressFill.style.width = `${(state.currentCase / CASES.length) * 100}%`;
+
+  updateValuesDisplay();
+  updateProtocol();
+  updateSidebar();
+
+  panel.innerHTML = `
+    <div class="scenario-tag multiplayer">Relay-Raum</div>
+    <div class="scenario-title">Partie ist verbunden</div>
+    <div class="scenario-text">${caseData ? `Die Rollen sind für ${caseData.title} bereit, aber der Host hat die aktuelle Phase noch nicht freigegeben.` : 'Die Rollen sind verbunden, aber es wurde noch keine Phase freigegeben.'}</div>
+    <div class="round-status">
+      <div class="round-status-title">Wartezustand</div>
+      <div class="round-status-text">Sobald der Host die Runde oder Stichwahl öffnet, erscheint derselbe Fall automatisch in allen Sitzungen.</div>
+    </div>
+  `;
 }
 
 // ============================================================
@@ -1380,8 +1577,7 @@ function showTieBreakNotice(
     multiplayerQueueNotice = discardedQueuedVote
       ? 'Die alte Vormerkung wurde fuer die Stichwahl verworfen. Bitte waehle zwischen den verbleibenden Optionen neu.'
       : 'Die Stichwahl ist gestartet. Bitte waehle jetzt nur noch zwischen den verbleibenden Optionen.';
-    setMultiplayerStatus(`${detailText} ${multiplayerQueueNotice}`);
-    renderCase();
+    publishOpenedPhase(`${detailText} ${multiplayerQueueNotice}`);
     return;
   }
 
@@ -1522,6 +1718,8 @@ function closeConsequence(): void {
     ...result.state,
     selectedLens: null,
   });
+  currentPhaseStartedAt = null;
+  timedPhaseKey = null;
 
   if (result.systemicNotes.length > 0) {
     pendingSystemicNotes = result.systemicNotes;
@@ -1538,21 +1736,69 @@ function closeConsequence(): void {
 function startDecisionTimer(caseData: typeof CASES[0]): void {
   clearTimer();
 
-  if (timedCaseIndex !== state.currentCase) {
-    timedCaseIndex = state.currentCase;
-    timerRemaining = DECISION_TIMER_SECONDS;
+  const currentPhaseKey = getCurrentVotePhaseKey();
+  if (timedCaseIndex !== state.currentCase || timedPhaseKey !== currentPhaseKey || !currentPhaseStartedAt) {
+    if (!isMultiplayerMode()) {
+      markPhaseStarted();
+    } else if (!currentPhaseStartedAt) {
+      currentPhaseStartedAt = Date.now();
+      timedCaseIndex = state.currentCase;
+      timedPhaseKey = currentPhaseKey;
+    }
   }
 
+  timerRemaining = getSynchronizedTimerRemaining();
   updateTimerDisplay();
 
   timerInterval = setInterval(() => {
-    timerRemaining -= 1;
+    timerRemaining = getSynchronizedTimerRemaining();
     updateTimerDisplay();
     if (timerRemaining <= 0) {
       clearTimer();
+      if (isMultiplayerMode()) {
+        handleMultiplayerTimeout(caseData);
+        return;
+      }
       autoDecide(caseData);
     }
   }, 1000);
+}
+
+function handleMultiplayerTimeout(caseData: typeof CASES[0]): void {
+  const runtime = multiplayer;
+  if (!runtime) {
+    return;
+  }
+
+  if (!runtime.isHost) {
+    setMultiplayerStatus('Beratungszeit abgelaufen. Warte auf die host-autoritative Fortschreibung oder synchronisiere kurz neu.');
+    void runtime.requestStateSync();
+    return;
+  }
+
+  ensureCouncilPreVote();
+  const selectedRole = state.selectedRole;
+  const fallbackDecision = getCurrentCouncilPreVote() ?? getAvailableDecisions(caseData)[0] ?? null;
+  if (!selectedRole || !fallbackDecision) {
+    setMultiplayerStatus('Beratungszeit abgelaufen, aber die Phase konnte nicht automatisch aufgelöst werden. Raum wird neu synchronisiert.');
+    void runtime.requestStateSync();
+    return;
+  }
+
+  runMultiplayerRequest({
+    kind: 'vote',
+    waitMessage: `Automatische Timeout-Stimme für ${selectedRole.name} hängt fest.`,
+    request: () => runtime.resolveTimedOutVote({
+      caseId: state.currentCase + 1,
+      phaseKey: getCurrentVotePhaseKey(),
+      roleId: selectedRole.id,
+      optionId: fallbackDecision.id,
+      isTieBreak: Boolean(state.tieBreakOptions),
+    }),
+    errorMessage: 'Die automatische Timeout-Stimme konnte nicht übertragen werden.',
+  });
+  setMultiplayerStatus(`Beratungszeit abgelaufen. ${selectedRole.name} wird automatisch mit „${fallbackDecision.text}“ gewertet.`);
+  renderCase();
 }
 
 function clearTimer(): void {
@@ -1689,6 +1935,7 @@ function updateSidebar(): void {
     .map((role) => {
       const isCurrentRole = role.id === currentRoleId;
       const isQueuedRole = queuedVote?.roleId === role.id;
+      const isOwnedLocally = isLocalOwnedRole(role.id);
       const status = state.roundVotes[role.id]
         ? 'abgestimmt'
         : isQueuedRole
@@ -1706,15 +1953,18 @@ function updateSidebar(): void {
       const queueMarkup = isQueuedRole && queuedVote
         ? `<div class="role-roster-queue-note">Vormerkung: ${queuedVote.optionText}</div>`
         : '';
+      const ownerMarkup = isOwnedLocally
+        ? '<span class="role-owner-badge">👑 Du</span>'
+        : '';
       const abilityMarkup = isCurrentRole
         ? renderRoleAbilityInline(role, isAbilityAvailable(state))
         : '';
       return `
-        <div class="role-roster-item ${statusClass}">
+        <div class="role-roster-item ${statusClass}${isOwnedLocally ? ' own-role' : ''}">
           <div class="role-roster-avatar">${role.icon}</div>
           <div class="role-roster-content">
             <div class="role-roster-line">
-              <span class="role-roster-name">${role.name}</span>
+              <span class="role-roster-name">${role.name}${ownerMarkup}</span>
               <span class="role-roster-status">${status}</span>
             </div>
             <div class="role-roster-perspective">${role.perspective}</div>
@@ -1871,6 +2121,10 @@ function closeValueInfo(): void {
   document.getElementById('value-info-overlay')?.classList.add('hidden');
 }
 
+function reopenGameIntro(): void {
+  showScreen('screen-intro');
+}
+
 // ============================================================
 // FINALE & ENDSCREEN
 // ============================================================
@@ -1984,6 +2238,8 @@ function resetGame(): void {
   clearTimer();
   timerRemaining = DECISION_TIMER_SECONDS;
   timedCaseIndex = null;
+  timedPhaseKey = null;
+  currentPhaseStartedAt = null;
   pendingDecision = null;
   pendingSystemicNotes = [];
   pendingOverlayAction = 'none';
@@ -2003,6 +2259,7 @@ declare global {
     openValueInfo: typeof openValueInfo;
     openValuesOverview: typeof openValuesOverview;
     closeValueInfo: typeof closeValueInfo;
+    reopenGameIntro: typeof reopenGameIntro;
     triggerAbility: typeof triggerAbility;
     showEnding: typeof showEnding;
     showPaxEnding: typeof showPaxEnding;
@@ -2020,6 +2277,7 @@ window.closeConsequence = closeConsequence;
 window.openValueInfo = openValueInfo;
 window.openValuesOverview = openValuesOverview;
 window.closeValueInfo = closeValueInfo;
+window.reopenGameIntro = reopenGameIntro;
 window.triggerAbility = triggerAbility;
 window.showEnding = showEnding;
 window.showPaxEnding = showPaxEnding;
@@ -2039,6 +2297,10 @@ if (MULTIPLAYER_CONFIG) {
     validRoleIds: ROLES.map((role) => role.id),
     getCurrentRoundId,
     getAuthoritativeState: () => state,
+    getPhaseStartedAt: () => currentPhaseStartedAt,
+    onRelayIssue: (message: string) => {
+      setMultiplayerStatus(message);
+    },
   });
   multiplayer.onEvent(handleMultiplayerTransportEvent);
   multiplayer.start();

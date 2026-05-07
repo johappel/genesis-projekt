@@ -106,6 +106,51 @@ export class HostAuthority {
     await this.bus.publish(event);
   }
 
+  async publishAuthoritativeVote(params: {
+    roundId: string;
+    caseId: number;
+    phaseKey: string;
+    roleId: string;
+    optionId: string;
+    isTieBreak: boolean;
+  }): Promise<void> {
+    if (params.roundId !== this.getCurrentRoundId()) {
+      throw new Error('ROUND_MISMATCH');
+    }
+
+    if (params.phaseKey !== getVotePhaseKey(this.getMergedSnapshot().state)) {
+      throw new Error('ROUND_MISMATCH');
+    }
+
+    const ownerPlayerId = this.getMergedSnapshot().roleOwners[params.roleId];
+    if (!ownerPlayerId) {
+      throw new Error('ROLE_NOT_CLAIMED');
+    }
+
+    const roundVotes = this.acceptedVotesByPhase[params.phaseKey] ?? {};
+    if (roundVotes[params.roleId]) {
+      throw new Error('ALREADY_VOTED');
+    }
+
+    const response = this.eventFactory.createVoteCastResolved({
+      roundId: params.roundId,
+      caseId: params.caseId,
+      phaseKey: params.phaseKey,
+      roleId: params.roleId,
+      optionId: params.optionId,
+      claimedByPlayerId: ownerPlayerId,
+      isTieBreak: params.isTieBreak,
+      voteStatus: 'accepted',
+    });
+
+    this.acceptedVotesByPhase[params.phaseKey] = {
+      ...roundVotes,
+      [params.roleId]: response,
+    };
+
+    await this.bus.publish(response);
+  }
+
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -114,7 +159,7 @@ export class HostAuthority {
   private getMergedSnapshot(): StateSnapshot {
     const snapshot = this.getAuthoritativeSnapshot();
     const currentRoundId = `round-${snapshot.state.currentCase}`;
-    const phaseKey = getVotePhaseKey(currentRoundId, Boolean(snapshot.state.tieBreakOptions));
+    const phaseKey = getVotePhaseKey(snapshot.state);
     const authoritativeRoundVotes = Object.values(this.acceptedVotesByPhase[phaseKey] ?? {}).reduce<Record<string, string>>(
       (votes, voteEvent) => {
         votes[voteEvent.roleId] = voteEvent.optionId;
@@ -169,6 +214,7 @@ export class HostAuthority {
     const response = this.eventFactory.createVoteCastResolved({
       roundId: this.getCurrentRoundId(),
       caseId: event.caseId,
+      phaseKey: event.phaseKey,
       roleId: event.roleId,
       optionId: event.optionId,
       claimedByPlayerId: event.playerId,
@@ -185,6 +231,7 @@ export class HostAuthority {
     const response = this.eventFactory.createRoundClosedResolved({
       roundId: this.getCurrentRoundId(),
       caseId: event.caseId,
+      phaseKey: event.phaseKey,
       resolvedOptionId: event.resolvedOptionId,
       closedByPlayerId: event.closedByPlayerId,
       voteSummary: event.voteSummary,
@@ -253,6 +300,13 @@ export class HostAuthority {
       };
     }
 
+    if (event.phaseKey !== getVotePhaseKey(this.getMergedSnapshot().state)) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
     const roleOwners = this.getMergedSnapshot().roleOwners;
     const ownerPlayerId = roleOwners[event.roleId];
     if (!ownerPlayerId) {
@@ -277,8 +331,7 @@ export class HostAuthority {
       };
     }
 
-    const phaseKey = getVotePhaseKey(event.roundId, event.isTieBreak);
-    const roundVotes = this.acceptedVotesByPhase[phaseKey] ?? {};
+    const roundVotes = this.acceptedVotesByPhase[event.phaseKey] ?? {};
     if (roundVotes[event.roleId]) {
       return {
         voteStatus: 'rejected',
@@ -286,7 +339,7 @@ export class HostAuthority {
       };
     }
 
-    this.acceptedVotesByPhase[phaseKey] = {
+    this.acceptedVotesByPhase[event.phaseKey] = {
       ...roundVotes,
       [event.roleId]: event,
     };
@@ -307,6 +360,13 @@ export class HostAuthority {
       };
     }
 
+    if (event.phaseKey !== getVotePhaseKey(this.getMergedSnapshot().state)) {
+      return {
+        roundCloseStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
     if (this.closedRounds.has(event.roundId)) {
       return {
         roundCloseStatus: 'rejected',
@@ -316,7 +376,7 @@ export class HostAuthority {
 
     const claimedRoles = Object.keys(this.getMergedSnapshot().roleOwners);
     const acceptedVotes = Object.values(
-      this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, this.isTieBreakPhaseActive())] ?? {}
+      this.acceptedVotesByPhase[event.phaseKey] ?? {}
     );
     if (!claimedRoles.length || acceptedVotes.length !== claimedRoles.length) {
       return {
@@ -348,15 +408,14 @@ export class HostAuthority {
       resolvedOptionId: event.resolvedOptionId,
       voteSummary: event.voteSummary,
     };
-    delete this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, false)];
-    delete this.acceptedVotesByPhase[getVotePhaseKey(event.roundId, true)];
+    for (const phaseKey of Object.keys(this.acceptedVotesByPhase)) {
+      if (phaseKey.startsWith(`${event.roundId}:`)) {
+        delete this.acceptedVotesByPhase[phaseKey];
+      }
+    }
     return {
       roundCloseStatus: 'accepted',
     };
-  }
-
-  private isTieBreakPhaseActive(): boolean {
-    return Boolean(this.getAuthoritativeSnapshot().state.tieBreakOptions);
   }
 
   private matchesAcceptedVoteSummary(
@@ -410,6 +469,8 @@ function compareVoteSummaryEntry(
   return leftKey.localeCompare(rightKey);
 }
 
-function getVotePhaseKey(roundId: string, isTieBreak: boolean): string {
-  return `${roundId}:${isTieBreak ? 'tie-break' : 'base'}`;
+function getVotePhaseKey(state: StateSnapshot['state']): string {
+  return state.tieBreakOptions
+    ? `round-${state.currentCase}:tie-break-${state.tieBreakRound}`
+    : `round-${state.currentCase}:base`;
 }

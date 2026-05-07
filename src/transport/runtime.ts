@@ -15,6 +15,13 @@ import type {
 const DEFAULT_RELAY_URL = 'http://localhost:7000/';
 const REQUEST_SYNC_DELAY_MS = 120;
 
+export function formatRelayIssueMessage(relayUrl: string, detail?: string): string {
+  const normalizedDetail = detail?.trim();
+  return normalizedDetail
+    ? `Das angegebene Relay ${relayUrl} ist nicht erreichbar. Prüfe die URL oder starte den Relay-Server. Details: ${normalizedDetail}`
+    : `Das angegebene Relay ${relayUrl} ist nicht erreichbar. Prüfe die URL oder starte den Relay-Server.`;
+}
+
 export interface MultiplayerUrlConfig {
   mode: 'host' | 'join';
   gameId: string;
@@ -28,6 +35,8 @@ export interface RelayMultiplayerRuntimeOptions {
   validRoleIds: string[];
   getCurrentRoundId: () => string;
   getAuthoritativeState: () => GameState;
+  getPhaseStartedAt: () => number | null;
+  onRelayIssue?: (message: string) => void;
 }
 
 type TransportListener = (event: TransportEvent) => void;
@@ -70,7 +79,11 @@ export class RelayMultiplayerRuntime {
 
   private readonly getAuthoritativeState: () => GameState;
 
+  private readonly getPhaseStartedAt: () => number | null;
+
   private readonly listeners = new Set<TransportListener>();
+
+  private readonly onRelayIssue?: (message: string) => void;
 
   private readonly seenEventIds = new Set<string>();
 
@@ -80,14 +93,23 @@ export class RelayMultiplayerRuntime {
 
   private roleOwners: Record<string, string> = {};
 
+  private authoritativeHostPlayerId: string | null = null;
+
+  private lastRelayIssueMessage: string | null = null;
+
   constructor(options: RelayMultiplayerRuntimeOptions) {
     this.config = options.config;
     this.getCurrentRoundId = options.getCurrentRoundId;
     this.getAuthoritativeState = options.getAuthoritativeState;
+    this.getPhaseStartedAt = options.getPhaseStartedAt;
+    this.onRelayIssue = options.onRelayIssue;
     this.session = createEphemeralTransportSession(options.config.mode === 'host');
     this.bus = new NostrRelayBus({
       relayUrls: [options.config.relayUrl],
       session: this.session,
+      onConnectionIssue: ({ reason }) => {
+        this.reportRelayIssue(formatRelayIssueMessage(this.config.relayUrl, reason));
+      },
     });
     this.eventFactory = new TransportEventFactory({
       gameId: options.config.gameId,
@@ -105,6 +127,10 @@ export class RelayMultiplayerRuntime {
           getAuthoritativeSnapshot: () => this.getAuthoritativeSnapshot(),
         })
       : null;
+
+    if (options.config.mode === 'host') {
+      this.authoritativeHostPlayerId = this.session.clientInfo.playerId;
+    }
   }
 
   get isEnabled(): true {
@@ -152,7 +178,8 @@ export class RelayMultiplayerRuntime {
     }
 
     this.unsubscribe = this.bus.subscribe(this.gameId, (event) => {
-      const eventId = `${event.playerId}:${event.seq}`;
+      this.lastRelayIssueMessage = null;
+      const eventId = event.messageId ?? `${event.actorPubkey}:${event.seq}`;
       if (this.seenEventIds.has(eventId)) {
         return;
       }
@@ -167,12 +194,26 @@ export class RelayMultiplayerRuntime {
     this.hostAuthority?.start();
 
     if (this.isHost) {
-      void this.hostAuthority?.publishGameCreated();
+      void this.hostAuthority?.publishGameCreated().catch((error: unknown) => {
+        this.reportRelayIssue(
+          formatRelayIssueMessage(
+            this.config.relayUrl,
+            error instanceof Error ? error.message : 'Der Host-Start konnte nicht an das Relay gesendet werden.'
+          )
+        );
+      });
       return;
     }
 
     setTimeout(() => {
-      void this.requestStateSync();
+      void this.requestStateSync().catch((error: unknown) => {
+        this.reportRelayIssue(
+          formatRelayIssueMessage(
+            this.config.relayUrl,
+            error instanceof Error ? error.message : 'Die erste Synchronisierung mit dem Relay ist fehlgeschlagen.'
+          )
+        );
+      });
     }, REQUEST_SYNC_DELAY_MS);
   }
 
@@ -192,8 +233,18 @@ export class RelayMultiplayerRuntime {
     );
   }
 
+  async openPhase(): Promise<void> {
+    await this.bus.publish(
+      this.eventFactory.createPhaseOpened({
+        roundId: this.getCurrentRoundId(),
+        snapshot: this.getAuthoritativeSnapshot(),
+      })
+    );
+  }
+
   async castVote(params: {
     caseId: number;
+    phaseKey: string;
     roleId: string;
     optionId: string;
     isTieBreak: boolean;
@@ -202,6 +253,7 @@ export class RelayMultiplayerRuntime {
       this.eventFactory.createVoteCastRequested({
         roundId: this.getCurrentRoundId(),
         caseId: params.caseId,
+        phaseKey: params.phaseKey,
         roleId: params.roleId,
         optionId: params.optionId,
         isTieBreak: params.isTieBreak,
@@ -211,6 +263,7 @@ export class RelayMultiplayerRuntime {
 
   async closeRound(params: {
     caseId: number;
+    phaseKey: string;
     resolvedOptionId: string;
     voteSummary: RoundClosedEvent['voteSummary'];
   }): Promise<void> {
@@ -218,6 +271,7 @@ export class RelayMultiplayerRuntime {
       this.eventFactory.createRoundClosedRequested({
         roundId: this.getCurrentRoundId(),
         caseId: params.caseId,
+        phaseKey: params.phaseKey,
         resolvedOptionId: params.resolvedOptionId,
         voteSummary: params.voteSummary,
       })
@@ -234,16 +288,66 @@ export class RelayMultiplayerRuntime {
     );
   }
 
+  async resolveTimedOutVote(params: {
+    caseId: number;
+    phaseKey: string;
+    roleId: string;
+    optionId: string;
+    isTieBreak: boolean;
+  }): Promise<void> {
+    if (!this.isHost || !this.hostAuthority) {
+      return;
+    }
+
+    await this.hostAuthority.publishAuthoritativeVote({
+      roundId: this.getCurrentRoundId(),
+      caseId: params.caseId,
+      phaseKey: params.phaseKey,
+      roleId: params.roleId,
+      optionId: params.optionId,
+      isTieBreak: params.isTieBreak,
+    });
+  }
+
+  async broadcastStateSync(): Promise<void> {
+    if (!this.isHost) {
+      return;
+    }
+
+    await this.bus.publish(
+      this.eventFactory.createStateSyncSent({
+        roundId: this.getCurrentRoundId(),
+        snapshot: this.getAuthoritativeSnapshot(),
+      })
+    );
+  }
+
   private getAuthoritativeSnapshot(): StateSnapshot {
     return {
       state: this.getAuthoritativeState(),
       lastAppliedSeqByPlayer: {},
       roleOwners: this.getRoleOwners(),
+      phaseStartedAt: this.getPhaseStartedAt(),
     };
   }
 
   private applyRuntimeEffects(event: TransportEvent): void {
+    if (event.eventName === 'game-created') {
+      this.authoritativeHostPlayerId = event.hostPlayerId;
+      return;
+    }
+
     if (event.eventName === 'state-sync-sent') {
+      this.authoritativeHostPlayerId = event.authoritativePlayerId;
+      this.roleOwners = { ...event.snapshot.roleOwners };
+      return;
+    }
+
+    if (event.eventName === 'phase-opened') {
+      if (this.authoritativeHostPlayerId && event.authoritativePlayerId !== this.authoritativeHostPlayerId) {
+        return;
+      }
+
       this.roleOwners = { ...event.snapshot.roleOwners };
       return;
     }
@@ -260,6 +364,15 @@ export class RelayMultiplayerRuntime {
       }
       this.roleOwners = nextOwners;
     }
+  }
+
+  private reportRelayIssue(message: string): void {
+    if (this.lastRelayIssueMessage === message) {
+      return;
+    }
+
+    this.lastRelayIssueMessage = message;
+    this.onRelayIssue?.(message);
   }
 }
 

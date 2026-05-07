@@ -7,7 +7,7 @@ import { HostAuthority } from '../src/transport/hostAuthority.js';
 import { LocalBus } from '../src/transport/localBus.js';
 import { createEphemeralTransportSession } from '../src/transport/session.js';
 import { toRelayWebSocketUrl } from '../src/transport/nostrRelayBus.js';
-import { createRelayJoinUrl, readMultiplayerUrlConfig } from '../src/transport/runtime.js';
+import { createRelayJoinUrl, formatRelayIssueMessage, readMultiplayerUrlConfig } from '../src/transport/runtime.js';
 import type { StateSnapshot, TransportEvent } from '../src/transport/types.js';
 
 const BASE_EVENT: TransportEvent = {
@@ -700,6 +700,7 @@ describe('LocalBus', () => {
       state: {
         ...hostSnapshot.state,
         tieBreakOptions: ['sophia-1-a', 'sophia-1-b'],
+        tieBreakRound: 1,
         roundVotes: {},
       },
     };
@@ -720,6 +721,100 @@ describe('LocalBus', () => {
       eventName: 'vote-cast',
       voteStatus: 'accepted',
       isTieBreak: true,
+      roleId: 'theologin',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('akzeptiert in einer wiederholten Stichwahl neue Stimmen derselben Rollen', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerA = createEphemeralTransportSession(false);
+    const joinerB = createEphemeralTransportSession(false);
+    const factoryA = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerA.clientInfo,
+    });
+    const factoryB = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerB.clientInfo,
+    });
+    const theologin = ROLES.find((role) => role.id === 'theologin');
+    const juristin = ROLES.find((role) => role.id === 'juristin');
+    if (!theologin || !juristin) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    let hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [theologin, juristin],
+        selectedRole: theologin,
+        tieBreakOptions: ['sophia-1-a', 'sophia-1-b'],
+        tieBreakRound: 1,
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {
+        theologin: joinerA.clientInfo.playerId,
+        juristin: joinerB.clientInfo.playerId,
+      },
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(factoryA.createVoteCastRequested({ roundId: 'round-0', caseId: 1, phaseKey: 'round-0:tie-break-1', roleId: 'theologin', optionId: 'sophia-1-a', isTieBreak: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryB.createVoteCastRequested({ roundId: 'round-0', caseId: 1, phaseKey: 'round-0:tie-break-1', roleId: 'juristin', optionId: 'sophia-1-b', isTieBreak: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    hostSnapshot = {
+      ...hostSnapshot,
+      state: {
+        ...hostSnapshot.state,
+        selectedRole: theologin,
+        tieBreakRound: 2,
+        roundVotes: {},
+      },
+    };
+
+    await bus.publish(factoryA.createVoteCastRequested({ roundId: 'round-0', caseId: 1, phaseKey: 'round-0:tie-break-2', roleId: 'theologin', optionId: 'sophia-1-b', isTieBreak: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const acceptedRepeatedTieBreakVote = received.findLast(
+      (event) =>
+        event.eventName === 'vote-cast' &&
+        event.voteStatus === 'accepted' &&
+        event.phaseKey === 'round-0:tie-break-2' &&
+        event.roleId === 'theologin'
+    );
+
+    expect(acceptedRepeatedTieBreakVote).toMatchObject({
+      eventName: 'vote-cast',
+      voteStatus: 'accepted',
+      phaseKey: 'round-0:tie-break-2',
       roleId: 'theologin',
       authoritativePlayerId: hostSession.clientInfo.playerId,
     });
@@ -894,5 +989,17 @@ describe('createRelayJoinUrl', () => {
       gameId: 'abc123',
       relayUrl: 'http://localhost:7000/',
     })).toBe('http://localhost:5173/?mp=join&game=abc123&relay=http%3A%2F%2Flocalhost%3A7000%2F');
+  });
+});
+
+describe('Relay-Fehlermeldungen', () => {
+  it('formatiert einen klaren Hinweis fuer ein nicht erreichbares Relay', () => {
+    expect(formatRelayIssueMessage('http://localhost:7000/')).toBe(
+      'Das angegebene Relay http://localhost:7000/ ist nicht erreichbar. Prüfe die URL oder starte den Relay-Server.'
+    );
+
+    expect(formatRelayIssueMessage('ws://relay.invalid', 'Connection refused')).toBe(
+      'Das angegebene Relay ws://relay.invalid ist nicht erreichbar. Prüfe die URL oder starte den Relay-Server. Details: Connection refused'
+    );
   });
 });

@@ -10,10 +10,12 @@ export const GENESIS_TRANSPORT_KIND = 1;
 
 const PUBLISH_RETRY_ATTEMPTS = 4;
 const PUBLISH_RETRY_DELAY_MS = 120;
+const SUBSCRIPTION_RETRY_DELAY_MS = 250;
 
 export interface NostrRelayBusOptions {
   relayUrls: string[];
   session: EphemeralTransportSession;
+  onConnectionIssue?: (details: { relayUrls: string[]; reason?: string }) => void;
 }
 
 export function toRelayWebSocketUrl(relayUrl: string): string {
@@ -30,6 +32,38 @@ export function toRelayWebSocketUrl(relayUrl: string): string {
   }
 
   return `ws://${relayUrl}`;
+}
+
+function formatCloseReason(reason: unknown): string | null {
+  if (Array.isArray(reason)) {
+    const parts = reason
+      .map((entry) => formatCloseReason(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    return parts.length ? parts.join('; ') : null;
+  }
+
+  if (reason instanceof Error) {
+    return reason.message.trim() || null;
+  }
+
+  if (typeof reason === 'string') {
+    const trimmed = reason.trim();
+    return trimmed || null;
+  }
+
+  if (reason && typeof reason === 'object') {
+    try {
+      return JSON.stringify(reason);
+    } catch {
+      return String(reason);
+    }
+  }
+
+  if (typeof reason === 'number' || typeof reason === 'boolean') {
+    return String(reason);
+  }
+
+  return null;
 }
 
 export class NostrRelayBus implements TransportMessageBus {
@@ -93,18 +127,57 @@ export class NostrRelayBus implements TransportMessageBus {
       '#g': [gameId],
     };
 
-    const subscription = this.pool.subscribe(this.relayUrls, filter, {
-      onevent: (event) => {
-        const parsedEvent = parseTransportEvent(event);
-        if (!parsedEvent || parsedEvent.gameId !== gameId) {
-          return;
-        }
+    let closed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let subscription: { close(reason?: string): void } | null = null;
 
-        onEvent(parsedEvent);
-      },
-    });
+    const openSubscription = (): void => {
+      subscription = this.pool.subscribe(this.relayUrls, filter, {
+        onevent: (event) => {
+          const parsedEvent = parseTransportEvent(event);
+          if (!parsedEvent || parsedEvent.gameId !== gameId) {
+            return;
+          }
 
-    return () => subscription.close('unsubscribe');
+          onEvent(parsedEvent);
+        },
+        onclose: (reason) => {
+          const normalizedReason = formatCloseReason(reason) ?? undefined;
+          if (closed) {
+            return;
+          }
+
+          if (normalizedReason && normalizedReason.toLowerCase() === 'unsubscribe') {
+            return;
+          }
+
+          this.options.onConnectionIssue?.({
+            relayUrls: this.relayUrls,
+            reason: normalizedReason,
+          });
+
+          if (retryTimer !== null) {
+            clearTimeout(retryTimer);
+          }
+
+          retryTimer = setTimeout(() => {
+            if (!closed) {
+              openSubscription();
+            }
+          }, SUBSCRIPTION_RETRY_DELAY_MS);
+        },
+      });
+    };
+
+    openSubscription();
+
+    return () => {
+      closed = true;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+      }
+      subscription?.close('unsubscribe');
+    };
   }
 
   destroy(): void {
@@ -115,7 +188,12 @@ export class NostrRelayBus implements TransportMessageBus {
 function parseTransportEvent(event: NostrEvent): TransportEvent | null {
   try {
     const parsed = JSON.parse(event.content) as TransportEvent;
-    return parsed.actorPubkey === event.pubkey ? parsed : null;
+    return parsed.actorPubkey === event.pubkey
+      ? {
+          ...parsed,
+          messageId: event.id,
+        }
+      : null;
   } catch {
     return null;
   }
