@@ -7,6 +7,8 @@ import { NostrRelayBus } from './nostrRelayBus.js';
 import { createEphemeralTransportSession } from './session.js';
 import type {
   LensSelectedEvent,
+  PaktSubmittedEvent,
+  PaktVotedEvent,
   RoundClosedEvent,
   RoleClaimedEvent,
   StateSnapshot,
@@ -326,6 +328,36 @@ export class RelayMultiplayerRuntime {
     );
   }
 
+  async submitPakt(params: {
+    submittedByRoleId: string;
+    answers: PaktSubmittedEvent['answers'];
+  }): Promise<void> {
+    await this.bus.publish(
+      this.eventFactory.createPaktSubmittedRequested({
+        roundId: this.getCurrentRoundId(),
+        submittedByRoleId: params.submittedByRoleId,
+        answers: params.answers,
+      })
+    );
+  }
+
+  async votePaktArticle(params: {
+    articleId: PaktVotedEvent['articleId'];
+    votedByRoleId: string;
+    twoPointsRoleId: string;
+    onePointRoleId: string;
+  }): Promise<void> {
+    await this.bus.publish(
+      this.eventFactory.createPaktVotedRequested({
+        roundId: this.getCurrentRoundId(),
+        articleId: params.articleId,
+        votedByRoleId: params.votedByRoleId,
+        twoPointsRoleId: params.twoPointsRoleId,
+        onePointRoleId: params.onePointRoleId,
+      })
+    );
+  }
+
   async resolveTimedOutVote(params: {
     caseId: number;
     phaseKey: string;
@@ -436,6 +468,14 @@ export function isAcceptedRoleClaim(event: TransportEvent): event is RoleClaimed
 
 export function isAcceptedLensSelection(event: TransportEvent): event is LensSelectedEvent {
   return event.eventName === 'lens-selected' && event.selectionStatus === 'accepted';
+}
+
+export function isAcceptedPaktSubmission(event: TransportEvent): event is PaktSubmittedEvent {
+  return event.eventName === 'pakt-submitted' && event.submitStatus === 'accepted';
+}
+
+export function isAcceptedPaktVote(event: TransportEvent): event is PaktVotedEvent {
+  return event.eventName === 'pakt-voted' && event.voteStatus === 'accepted';
 }
 
 export function isAcceptedVote(event: TransportEvent): event is VoteCastEvent {

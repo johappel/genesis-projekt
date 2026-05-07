@@ -118,6 +118,24 @@ export interface ProtocolEntry {
   linse: string;
 }
 
+export type PaktArticleId = 'artikel-1' | 'artikel-2' | 'artikel-3' | 'artikel-4' | 'artikel-5';
+
+export interface PaktSubmission {
+  roleId: string;
+  playerId: string;
+  answers: Record<PaktArticleId, string>;
+  submittedAt: number;
+}
+
+export interface PaktArticleVote {
+  articleId: PaktArticleId;
+  votedByRoleId: string;
+  votedByPlayerId: string;
+  twoPointsRoleId: string;
+  onePointRoleId: string;
+  submittedAt: number;
+}
+
 export interface GameState {
   currentCase: number;
   selectedRole: Role | null;
@@ -136,5 +154,8 @@ export interface GameState {
   protokoll: ProtocolEntry[];
   linsenUsed: Record<string, number>;
   usedLensIdsByRole: Record<string, string[]>;
+  paktSubmissionsByRole: Record<string, PaktSubmission>;
+  paktArticleVotesByArticle: Partial<Record<PaktArticleId, Record<string, PaktArticleVote>>>;
+  paktWinnersByArticle: Partial<Record<PaktArticleId, string[]>>;
   pakt: Record<string, string>;
 }

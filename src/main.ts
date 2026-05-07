@@ -1,5 +1,5 @@
 import './style.css';
-import type { GameState, Lens, DecisionOption } from './game/types.js';
+import type { GameState, Lens, DecisionOption, PaktArticleId, PaktArticleVote, PaktSubmission } from './game/types.js';
 import { ROLES } from './game/data/roles.js';
 import { LENSES } from './game/data/lenses.js';
 import { CASES } from './game/data/cases.js';
@@ -18,8 +18,19 @@ import {
   resetRoundVotingState,
 } from './game/engine/voting.js';
 import { closeRound, getSystemicRiskWarning, getEmergencyEndingBadge, getAppliedRoundEffect } from './game/engine/rounds.js';
+import {
+  createEmptyPaktAnswers,
+  deriveResolvedPakt,
+  haveAllActiveRolesSubmittedPakt,
+  isCompletePaktSubmission,
+  isPaktScoringRequired,
+  normalizePaktAnswers,
+  PAKT_ARTICLE_IDS,
+} from './game/engine/pakt.js';
 import { activateAbility, isAbilityAvailable } from './game/rules/abilities.js';
 import {
+  isAcceptedPaktSubmission,
+  isAcceptedPaktVote,
   createRelayJoinUrl,
   isAcceptedLensSelection,
   isAcceptedRoundClose,
@@ -59,7 +70,7 @@ type LocalStartMode = 'singleplayer' | 'same-device';
 
 let localStartMode: LocalStartMode = 'singleplayer';
 
-type PendingMultiplayerRequestKind = 'role-claim' | 'lens-select' | 'vote' | 'round-close';
+type PendingMultiplayerRequestKind = 'role-claim' | 'lens-select' | 'vote' | 'round-close' | 'pakt-submit' | 'pakt-vote';
 
 type QueuedMultiplayerVote = {
   phaseKey: string;
@@ -462,6 +473,67 @@ function hasSubmittedPakt(currentState: GameState): boolean {
   return Object.values(currentState.pakt).some((value) => value.trim().length > 0);
 }
 
+function getPaktArticleId(index: number): PaktArticleId {
+  return `artikel-${index + 1}` as PaktArticleId;
+}
+
+function getPaktArticleMeta(articleId: PaktArticleId): (typeof UI_TEXT.paktArticles)[number] {
+  return UI_TEXT.paktArticles[PAKT_ARTICLE_IDS.indexOf(articleId)] ?? UI_TEXT.paktArticles[0];
+}
+
+function getRoleName(roleId: string): string {
+  return ROLES.find((role) => role.id === roleId)?.name ?? roleId;
+}
+
+function getPaktSubmissionProgress(): { submitted: typeof ROLES; pending: typeof ROLES } {
+  return state.activeRoles.reduce(
+    (groups, role) => {
+      if (state.paktSubmissionsByRole[role.id]) {
+        groups.submitted.push(role);
+      } else {
+        groups.pending.push(role);
+      }
+      return groups;
+    },
+    {
+      submitted: [] as typeof ROLES,
+      pending: [] as typeof ROLES,
+    }
+  );
+}
+
+function getLocalPaktSubmission(): PaktSubmission | null {
+  const localRole = getLocalOwnedRole();
+  return localRole ? state.paktSubmissionsByRole[localRole.id] ?? null : null;
+}
+
+function getLocalPaktVote(articleId: PaktArticleId): PaktArticleVote | null {
+  const localRole = getLocalOwnedRole();
+  if (!localRole) {
+    return null;
+  }
+
+  return state.paktArticleVotesByArticle[articleId]?.[localRole.id] ?? null;
+}
+
+function hasLocalCompletedPaktVoting(): boolean {
+  const localRole = getLocalOwnedRole();
+  if (!localRole) {
+    return false;
+  }
+
+  return PAKT_ARTICLE_IDS.every((articleId) => Boolean(state.paktArticleVotesByArticle[articleId]?.[localRole.id]));
+}
+
+function synchronizeDerivedPaktState(): void {
+  const resolved = deriveResolvedPakt(state);
+  state = {
+    ...state,
+    pakt: resolved.finalPakt,
+    paktWinnersByArticle: resolved.winnersByArticle,
+  };
+}
+
 function readPaktDraft(): Record<string, string> {
   try {
     const stored = sessionStorage.getItem(PAKT_DRAFT_STORAGE_KEY);
@@ -497,31 +569,41 @@ function clearPaktDraft(): void {
   }
 }
 
-function readPaktInputs(): Record<string, string> {
-  const pakt: Record<string, string> = {};
-  for (let i = 1; i <= 5; i += 1) {
-    const el = document.getElementById(`pakt-${i}`) as HTMLTextAreaElement | null;
-    pakt[`artikel-${i}`] = el?.value.trim() ?? '';
+function readPaktInputs(): Record<PaktArticleId, string> {
+  const answers = createEmptyPaktAnswers();
+  for (let i = 0; i < PAKT_ARTICLE_IDS.length; i += 1) {
+    const el = document.getElementById(`pakt-${i + 1}`) as HTMLTextAreaElement | null;
+    answers[getPaktArticleId(i)] = el?.value.trim() ?? '';
   }
-  return pakt;
+  return answers;
 }
 
-function syncPaktInputsFromState(): void {
-  const values = hasSubmittedPakt(state) ? state.pakt : readPaktDraft();
-  for (let i = 1; i <= 5; i += 1) {
-    const el = document.getElementById(`pakt-${i}`) as HTMLTextAreaElement | null;
+function setPaktInputs(values: Partial<Record<PaktArticleId, string>>, readOnly = false): void {
+  for (let i = 0; i < PAKT_ARTICLE_IDS.length; i += 1) {
+    const el = document.getElementById(`pakt-${i + 1}`) as HTMLTextAreaElement | null;
     if (!el) {
       continue;
     }
 
-    el.value = values[`artikel-${i}`] ?? '';
+    el.value = values[getPaktArticleId(i)] ?? '';
+    el.readOnly = readOnly;
   }
+}
+
+function syncPaktInputsFromState(): void {
+  if (isMultiplayerMode()) {
+    const localSubmission = getLocalPaktSubmission();
+    setPaktInputs(localSubmission?.answers ?? readPaktDraft(), Boolean(localSubmission));
+    return;
+  }
+
+  setPaktInputs(hasSubmittedPakt(state) ? state.pakt : readPaktDraft(), false);
 }
 
 function bindPaktDraftInputs(): void {
   document.querySelectorAll<HTMLTextAreaElement>('.pakt-input').forEach((input) => {
     input.addEventListener('input', () => {
-      if (hasSubmittedPakt(state)) {
+      if (hasSubmittedPakt(state) || (isMultiplayerMode() && getLocalPaktSubmission())) {
         return;
       }
 
@@ -537,7 +619,6 @@ function restoreFinalScreenFromState(): void {
     return;
   }
 
-  syncPaktInputsFromState();
   showScreen('screen-finale');
 }
 
@@ -671,6 +752,10 @@ function updateRoleFlowAfterTransport(): void {
   const activeScreen = document.querySelector('.screen.active')?.id;
   if (activeScreen === 'screen-game') {
     renderCase();
+  } else if (activeScreen === 'screen-finale') {
+    renderFinaleScreen();
+  } else if (activeScreen === 'screen-end' && hasSubmittedPakt(state)) {
+    renderEndScreen(getCurrentEndingFromState());
   }
 }
 
@@ -748,6 +833,48 @@ function getVoteRejectionReasonLabel(reason?: string): string {
       return 'Diese Rolle gehoert in diesem Raum einem anderen Client';
     case 'ROLE_NOT_CLAIMED':
       return 'Die Rolle ist im Raum noch nicht sauber zugewiesen';
+    default:
+      return reason ?? 'unbekannter Grund';
+  }
+}
+
+function getPaktSubmissionRejectionReasonLabel(reason?: string): string {
+  switch (reason) {
+    case 'ROUND_MISMATCH':
+      return 'das Finale hat sich im Raum bereits verändert';
+    case 'ROLE_NOT_CLAIMED':
+      return 'deine Rolle ist im Raum nicht sauber zugewiesen';
+    case 'ROLE_NOT_OWNED':
+      return 'diese Rolle gehört in diesem Raum einem anderen Client';
+    case 'PAKT_ALREADY_SUBMITTED':
+      return 'für diese Rolle liegt bereits ein verbindlicher Beitrag vor';
+    case 'EMPTY_ANSWER':
+      return 'mindestens ein Artikel ist noch leer';
+    default:
+      return reason ?? 'unbekannter Grund';
+  }
+}
+
+function getPaktVoteRejectionReasonLabel(reason?: string): string {
+  switch (reason) {
+    case 'ROUND_MISMATCH':
+      return 'die Finalphase hat sich inzwischen verändert';
+    case 'ROLE_NOT_CLAIMED':
+      return 'deine Rolle ist im Raum nicht sauber zugewiesen';
+    case 'ROLE_NOT_OWNED':
+      return 'diese Rolle gehört in diesem Raum einem anderen Client';
+    case 'PAKT_NOT_READY':
+      return 'noch nicht alle Rollen haben ihren Beitrag eingereicht';
+    case 'ARTICLE_ALREADY_VOTED':
+      return 'für diesen Artikel wurde von deiner Rolle bereits gewertet';
+    case 'SELF_VOTE':
+      return 'du darfst den eigenen Beitrag nicht bewerten';
+    case 'DUPLICATE_TARGET':
+      return '2 Punkte und 1 Punkt müssen an zwei verschiedene Beiträge gehen';
+    case 'SUBMISSION_MISSING':
+      return 'mindestens einer der gewählten Beiträge liegt dem Host nicht vor';
+    case 'INSUFFICIENT_CANDIDATES':
+      return 'bei zwei Rollen entfällt die Bewertungsphase';
     default:
       return reason ?? 'unbekannter Grund';
   }
@@ -1054,6 +1181,10 @@ function restoreAcceptedRoundCloseFromSync(roundClose: {
 function handleMultiplayerTransportEvent(event: TransportEvent): void {
   const eventSummary = event.eventName === 'vote-cast'
     ? `${event.roleId} → ${event.optionId} · ${event.voteStatus}`
+    : event.eventName === 'pakt-submitted'
+      ? `${event.submittedByRoleId} · ${event.submitStatus}`
+    : event.eventName === 'pakt-voted'
+      ? `${event.articleId} · ${event.votedByRoleId} → ${event.twoPointsRoleId}/${event.onePointRoleId} · ${event.voteStatus}`
     : event.eventName === 'lens-selected'
       ? `${event.selectedByRoleId} → ${event.lensId} · ${event.selectionStatus}`
     : event.eventName === 'role-claimed'
@@ -1073,6 +1204,10 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
     detail: eventSummary,
     durationMs: event.eventName === 'vote-cast'
       ? getPendingRequestDuration('vote')
+      : event.eventName === 'pakt-submitted'
+        ? getPendingRequestDuration('pakt-submit')
+      : event.eventName === 'pakt-voted'
+        ? getPendingRequestDuration('pakt-vote')
       : event.eventName === 'round-closed'
         ? getPendingRequestDuration('round-close')
         : event.eventName === 'lens-selected'
@@ -1102,6 +1237,7 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
     clearPendingMultiplayerRequest();
     resetTransientMultiplayerUi();
     state = event.snapshot.state;
+    synchronizeDerivedPaktState();
     currentPhaseStartedAt = event.snapshot.phaseStartedAt ?? null;
     timedCaseIndex = currentPhaseStartedAt !== null ? state.currentCase : null;
     timedPhaseKey = currentPhaseStartedAt !== null ? getCurrentVotePhaseKey() : null;
@@ -1117,7 +1253,9 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
       setMultiplayerStatus(
         hasSubmittedPakt(state)
           ? 'State-Sync empfangen. Die gemeinsame Auswertung wurde wiederhergestellt.'
-          : 'State-Sync empfangen. Das Pakt-Formular wurde wiederhergestellt.'
+          : haveAllActiveRolesSubmittedPakt(state)
+            ? 'State-Sync empfangen. Die Beitragsphase ist abgeschlossen; die Artikelwertung wurde wiederhergestellt.'
+            : 'State-Sync empfangen. Das Pakt-Formular wurde wiederhergestellt.'
       );
       return;
     }
@@ -1206,6 +1344,52 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
           ? 'Der Host konnte nicht erreicht werden. Prüfe die Relay-Verbindung und versuche es erneut.'
           : 'Kein Host erreichbar – der Raum wurde möglicherweise noch nicht geöffnet oder das Relay ist nicht verbunden.';
       setMultiplayerStatus(`Rollenwahl abgelehnt. ${rejectionHint}`);
+    }
+    return;
+  }
+
+  if (event.eventName === 'pakt-submitted') {
+    const paktSubmissionEvent = event;
+
+    if (isAcceptedPaktSubmission(event)) {
+      if (paktSubmissionEvent.submittedByPlayerId === multiplayer?.playerId) {
+        clearPendingMultiplayerRequest();
+      }
+      applyAcceptedPaktSubmission(paktSubmissionEvent);
+      setMultiplayerStatus(
+        paktSubmissionEvent.submittedByPlayerId === multiplayer?.playerId
+          ? 'Dein Pakt-Beitrag ist verbindlich gespeichert.'
+          : `${getRoleName(paktSubmissionEvent.submittedByRoleId)} hat den Pakt-Beitrag eingereicht.`
+      );
+      return;
+    }
+
+    if (paktSubmissionEvent.submitStatus === 'rejected' && paktSubmissionEvent.submittedByPlayerId === multiplayer?.playerId) {
+      clearPendingMultiplayerRequest();
+      setMultiplayerStatus(`Pakt-Beitrag abgelehnt: ${getPaktSubmissionRejectionReasonLabel(paktSubmissionEvent.rejectionReason)}.`);
+    }
+    return;
+  }
+
+  if (event.eventName === 'pakt-voted') {
+    const paktVoteEvent = event;
+
+    if (isAcceptedPaktVote(event)) {
+      if (paktVoteEvent.votedByPlayerId === multiplayer?.playerId) {
+        clearPendingMultiplayerRequest();
+      }
+      applyAcceptedPaktVote(paktVoteEvent);
+      setMultiplayerStatus(
+        paktVoteEvent.votedByPlayerId === multiplayer?.playerId
+          ? `${getPaktArticleMeta(paktVoteEvent.articleId).title} ist gewertet.`
+          : `${getRoleName(paktVoteEvent.votedByRoleId)} hat ${getPaktArticleMeta(paktVoteEvent.articleId).title} bewertet.`
+      );
+      return;
+    }
+
+    if (paktVoteEvent.voteStatus === 'rejected' && paktVoteEvent.votedByPlayerId === multiplayer?.playerId) {
+      clearPendingMultiplayerRequest();
+      setMultiplayerStatus(`Pakt-Wertung abgelehnt: ${getPaktVoteRejectionReasonLabel(paktVoteEvent.rejectionReason)}.`);
     }
     return;
   }
@@ -1306,7 +1490,7 @@ function showScreen(id: string): void {
   const screen = document.getElementById(id);
   if (!screen) return;
   if (id === 'screen-finale') {
-    syncPaktInputsFromState();
+    renderFinaleScreen();
   }
   screen.style.display = 'block';
   screen.classList.add('active');
@@ -2646,12 +2830,282 @@ function reopenGameIntro(): void {
 // ============================================================
 // FINALE & ENDSCREEN
 // ============================================================
+function renderPaktSubmissionProgress(): string {
+  const progress = getPaktSubmissionProgress();
+  return `
+    <div class="pakt-progress-grid">
+      <div class="pakt-progress-card success">
+        <div class="pakt-progress-label">Eingereicht</div>
+        <div class="pakt-progress-list">${progress.submitted.length
+          ? progress.submitted.map((role) => `${role.icon} ${role.name}`).join('<br>')
+          : '<span style="color:var(--text-dim)">Noch niemand</span>'}</div>
+      </div>
+      <div class="pakt-progress-card">
+        <div class="pakt-progress-label">Fehlt noch</div>
+        <div class="pakt-progress-list">${progress.pending.length
+          ? progress.pending.map((role) => `${role.icon} ${role.name}`).join('<br>')
+          : '<span style="color:var(--text-dim)">Alle Beiträge liegen vor</span>'}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPaktVotingCard(articleId: PaktArticleId, localRoleId: string): string {
+  const article = getPaktArticleMeta(articleId);
+  const localVote = getLocalPaktVote(articleId);
+  const candidateRoles = state.activeRoles.filter((role) => role.id !== localRoleId && Boolean(state.paktSubmissionsByRole[role.id]));
+  const defaultTwo = candidateRoles[0]?.id ?? '';
+  const defaultOne = candidateRoles[1]?.id ?? candidateRoles[0]?.id ?? '';
+  const optionsMarkup = candidateRoles
+    .map((role) => `<option value="${role.id}">${role.icon} ${role.name}</option>`)
+    .join('');
+  const contributionsMarkup = state.activeRoles
+    .filter((role) => Boolean(state.paktSubmissionsByRole[role.id]))
+    .map((role) => {
+      const answer = state.paktSubmissionsByRole[role.id]?.answers[articleId] ?? '';
+      return `
+        <div class="pakt-contribution${role.id === localRoleId ? ' own' : ''}">
+          <div class="pakt-contribution-author">${role.icon} ${role.name}${role.id === localRoleId ? ' · dein Text' : ''}</div>
+          <div>${answer || '<em style="color:var(--text-dim)">–</em>'}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const voteMarkup = localVote
+    ? `<div class="pakt-vote-confirmation">Du hast 2 Punkte an ${getRoleName(localVote.twoPointsRoleId)} und 1 Punkt an ${getRoleName(localVote.onePointRoleId)} vergeben.</div>`
+    : candidateRoles.length < 2
+      ? '<div class="pakt-vote-confirmation">Für diesen Artikel gibt es nicht genug fremde Beiträge für eine 2-/1-Punkt-Wertung.</div>'
+      : `
+          <div class="pakt-vote-controls">
+            <label class="pakt-vote-label" for="pakt-vote-${articleId}-two">2 Punkte</label>
+            <select id="pakt-vote-${articleId}-two" class="pakt-vote-select">${optionsMarkup.replace(`value="${defaultTwo}"`, `value="${defaultTwo}" selected`)}</select>
+            <label class="pakt-vote-label" for="pakt-vote-${articleId}-one">1 Punkt</label>
+            <select id="pakt-vote-${articleId}-one" class="pakt-vote-select">${optionsMarkup.replace(`value="${defaultOne}"`, `value="${defaultOne}" selected`)}</select>
+            <button class="btn btn-secondary pakt-vote-button" onclick="submitPaktVote('${articleId}')">Wertung senden</button>
+          </div>
+        `;
+
+  const voteCount = Object.keys(state.paktArticleVotesByArticle[articleId] ?? {}).length;
+  return `
+    <div class="panel pakt-voting-card">
+      <div class="pakt-voting-header">
+        <div>
+          <div class="pakt-article-title">${article.title}</div>
+          <div class="pakt-article-meta">Bewertungen: ${voteCount}/${state.activeRoles.length}</div>
+        </div>
+      </div>
+      <div class="pakt-contribution-list">${contributionsMarkup}</div>
+      ${voteMarkup}
+    </div>
+  `;
+}
+
+function renderFinaleScreen(): void {
+  const formPanel = document.getElementById('pakt-form-panel');
+  const actionBar = document.getElementById('pakt-primary-actions');
+  const primaryButton = document.getElementById('pakt-primary-button') as HTMLButtonElement | null;
+  const multiplayerPanel = document.getElementById('pakt-multiplayer-panel');
+  if (!formPanel || !actionBar || !primaryButton || !multiplayerPanel) {
+    return;
+  }
+
+  syncPaktInputsFromState();
+
+  if (!isMultiplayerMode()) {
+    formPanel.classList.remove('hidden');
+    actionBar.classList.remove('hidden');
+    multiplayerPanel.classList.add('hidden');
+    primaryButton.textContent = UI_TEXT.paktSealBtn;
+    return;
+  }
+
+  const localRole = getLocalOwnedRole();
+  const localSubmission = getLocalPaktSubmission();
+  const submissionsComplete = haveAllActiveRolesSubmittedPakt(state);
+  const scoringRequired = isPaktScoringRequired(state);
+  const localVotingDone = hasLocalCompletedPaktVoting();
+
+  multiplayerPanel.classList.remove('hidden');
+
+  if (!localRole) {
+    formPanel.classList.add('hidden');
+    actionBar.classList.add('hidden');
+    multiplayerPanel.innerHTML = `
+      <div class="panel pakt-state-card">
+        <div class="pakt-phase-badge">Nostr-Finale</div>
+        <div class="pakt-state-copy">Dieses Finale ist rollenbasiert. Claim zuerst eine Rolle im Raum, damit du deinen Pakt einreichen kannst.</div>
+      </div>
+    `;
+    return;
+  }
+
+  if (!submissionsComplete) {
+    formPanel.classList.remove('hidden');
+    actionBar.classList.toggle('hidden', Boolean(localSubmission));
+    primaryButton.textContent = `Beitrag als ${localRole.name} einreichen`;
+    multiplayerPanel.innerHTML = `
+      <div class="panel pakt-state-card">
+        <div class="pakt-phase-badge">Beitragsphase</div>
+        <div class="pakt-state-copy">Jede Rolle reicht ihren vollständigen Pakt ein. Erst wenn alle Beiträge vorliegen, werden die Texte für die gemeinsame Wertung sichtbar.</div>
+        ${localSubmission
+          ? '<div class="pakt-vote-confirmation">Dein Beitrag ist eingereicht. Du kannst ihn nicht mehr ändern.</div>'
+          : '<div class="pakt-vote-confirmation">Dein Beitrag ist noch lokal editierbar, bis du ihn verbindlich absendest.</div>'}
+      </div>
+      ${renderPaktSubmissionProgress()}
+    `;
+    return;
+  }
+
+  if (!scoringRequired) {
+    formPanel.classList.add('hidden');
+    actionBar.classList.add('hidden');
+    multiplayerPanel.innerHTML = `
+      <div class="panel pakt-state-card success">
+        <div class="pakt-phase-badge">Direkte Einigung</div>
+        <div class="pakt-state-copy">Es sind nur zwei Rollen aktiv. Die Bewertungsphase entfällt, daher bleiben alle eingereichten Texte im gemeinsamen Genesis-Pakt erhalten.</div>
+      </div>
+      ${PAKT_ARTICLE_IDS.map((articleId) => renderPaktVotingCard(articleId, localRole.id)).join('')}
+    `;
+    return;
+  }
+
+  formPanel.classList.add('hidden');
+  actionBar.classList.add('hidden');
+  multiplayerPanel.innerHTML = `
+    <div class="panel pakt-state-card">
+      <div class="pakt-phase-badge">Bewertungsphase</div>
+      <div class="pakt-state-copy">Für jeden Artikel vergibst du einmal 2 Punkte und einmal 1 Punkt an zwei verschiedene fremde Beiträge. Selbstwahl ist ausgeschlossen.</div>
+      <div class="pakt-article-meta">Dein Status: ${localVotingDone ? 'Alle Artikel bewertet' : 'Bewertungen fehlen noch'}</div>
+    </div>
+    ${PAKT_ARTICLE_IDS.map((articleId) => renderPaktVotingCard(articleId, localRole.id)).join('')}
+    ${localVotingDone
+      ? '<div class="panel pakt-state-card"><div class="pakt-state-copy">Deine Wertungen sind gespeichert. Warte jetzt auf die verbleibenden Rollen; der gemeinsame Pakt erscheint automatisch, sobald alle Artikel ausgewertet sind.</div></div>'
+      : ''}
+  `;
+}
+
+function handlePaktPrimaryAction(): void {
+  if (isMultiplayerMode()) {
+    submitMultiplayerPakt();
+    return;
+  }
+
+  showEnding();
+}
+
+function submitMultiplayerPakt(): void {
+  const runtime = multiplayer;
+  const localRole = getLocalOwnedRole();
+  if (!runtime || !localRole) {
+    setMultiplayerStatus('Für das Nostr-Finale brauchst du eine lokal geclaimte Rolle.');
+    return;
+  }
+
+  const answers = normalizePaktAnswers(readPaktInputs());
+  if (!isCompletePaktSubmission(answers)) {
+    setMultiplayerStatus('Bitte formuliere erst alle fünf Pakt-Artikel, bevor du einreichst.');
+    return;
+  }
+
+  runMultiplayerRequest({
+    kind: 'pakt-submit',
+    waitMessage: `Pakt-Beitrag von ${localRole.name} hängt fest.`,
+    request: () => runtime.submitPakt({
+      submittedByRoleId: localRole.id,
+      answers,
+    }),
+    errorMessage: 'Pakt-Beitrag konnte nicht übertragen werden.',
+  });
+  setMultiplayerStatus(`Pakt-Beitrag von ${localRole.name} gesendet. Warte auf die host-autoritative Bestätigung.`);
+}
+
+function submitPaktVote(articleId: PaktArticleId): void {
+  const runtime = multiplayer;
+  const localRole = getLocalOwnedRole();
+  if (!runtime || !localRole) {
+    setMultiplayerStatus('Für die Artikelwertung brauchst du eine lokal geclaimte Rolle.');
+    return;
+  }
+
+  const twoPointsSelect = document.getElementById(`pakt-vote-${articleId}-two`) as HTMLSelectElement | null;
+  const onePointSelect = document.getElementById(`pakt-vote-${articleId}-one`) as HTMLSelectElement | null;
+  const twoPointsRoleId = twoPointsSelect?.value ?? '';
+  const onePointRoleId = onePointSelect?.value ?? '';
+  if (!twoPointsRoleId || !onePointRoleId) {
+    setMultiplayerStatus('Bitte wähle zuerst je einen Beitrag für 2 und 1 Punkt.');
+    return;
+  }
+
+  runMultiplayerRequest({
+    kind: 'pakt-vote',
+    waitMessage: `${getPaktArticleMeta(articleId).title} hängt bei der Wertung fest.`,
+    request: () => runtime.votePaktArticle({
+      articleId,
+      votedByRoleId: localRole.id,
+      twoPointsRoleId,
+      onePointRoleId,
+    }),
+    errorMessage: 'Artikelwertung konnte nicht übertragen werden.',
+  });
+  setMultiplayerStatus(`${getPaktArticleMeta(articleId).title} wurde zur Wertung gesendet.`);
+}
+
+function applyAcceptedPaktSubmission(event: Extract<TransportEvent, { eventName: 'pakt-submitted' }>): void {
+  state = {
+    ...state,
+    paktSubmissionsByRole: {
+      ...state.paktSubmissionsByRole,
+      [event.submittedByRoleId]: {
+        roleId: event.submittedByRoleId,
+        playerId: event.submittedByPlayerId,
+        answers: event.answers,
+        submittedAt: event.sentAt,
+      },
+    },
+  };
+  synchronizeDerivedPaktState();
+
+  if (event.submittedByPlayerId === multiplayer?.playerId) {
+    clearPaktDraft();
+    setPaktInputs(event.answers, true);
+  }
+
+  if (state.currentCase >= CASES.length) {
+    restoreFinalScreenFromState();
+  }
+}
+
+function applyAcceptedPaktVote(event: Extract<TransportEvent, { eventName: 'pakt-voted' }>): void {
+  state = {
+    ...state,
+    paktArticleVotesByArticle: {
+      ...state.paktArticleVotesByArticle,
+      [event.articleId]: {
+        ...(state.paktArticleVotesByArticle[event.articleId] ?? {}),
+        [event.votedByRoleId]: {
+          articleId: event.articleId,
+          votedByRoleId: event.votedByRoleId,
+          votedByPlayerId: event.votedByPlayerId,
+          twoPointsRoleId: event.twoPointsRoleId,
+          onePointRoleId: event.onePointRoleId,
+          submittedAt: event.sentAt,
+        },
+      },
+    },
+  };
+  synchronizeDerivedPaktState();
+
+  if (state.currentCase >= CASES.length) {
+    restoreFinalScreenFromState();
+  }
+}
+
 function showEnding(): void {
-  const pakt = readPaktInputs();
+  const pakt = normalizePaktAnswers(readPaktInputs());
   state = { ...state, pakt };
   clearPaktDraft();
 
-  // Passendes Ende ermitteln
   const ending = getCurrentEndingFromState();
 
   renderEndScreen(ending);
@@ -2694,11 +3148,14 @@ function renderEndScreen(ending: typeof ENDINGS[0]): void {
 
   // Pakt anzeigen
   if (paktDisplay) {
-    const labels = UI_TEXT.paktArticles.map((a) => a.title);
-    paktDisplay.innerHTML = Object.entries(state.pakt)
-      .map(([, val], i) =>
-        `<div class="pakt-display-article"><div class="pakt-article-label">${labels[i] ?? ''}</div><div>${val || '<em style="color:var(--text-dim)">–</em>'}</div></div>`
-      )
+    paktDisplay.innerHTML = PAKT_ARTICLE_IDS
+      .map((articleId) => {
+        const winnerRoleIds = state.paktWinnersByArticle[articleId] ?? [];
+        const winnerText = winnerRoleIds.length
+          ? `<div class="pakt-winner-meta">${winnerRoleIds.length > 1 ? 'Gewinnertexte von' : 'Gewinnertext von'} ${winnerRoleIds.map(getRoleName).join(', ')}</div>`
+          : '';
+        return `<div class="pakt-display-article"><div class="pakt-article-label">${getPaktArticleMeta(articleId).title}</div>${winnerText}<div>${state.pakt[articleId] || '<em style="color:var(--text-dim)">–</em>'}</div></div>`;
+      })
       .join('');
   }
 
@@ -2775,9 +3232,10 @@ declare global {
     closeValueInfo: typeof closeValueInfo;
     reopenGameIntro: typeof reopenGameIntro;
     triggerAbility: typeof triggerAbility;
-    showEnding: typeof showEnding;
+    showEnding: typeof handlePaktPrimaryAction;
     showPaxEnding: typeof showPaxEnding;
     resetGame: typeof resetGame;
+    submitPaktVote: typeof submitPaktVote;
     startRelayHost: typeof startRelayHost;
     joinRelayGame: typeof joinRelayGame;
     requestMultiplayerSync: typeof requestMultiplayerSync;
@@ -2796,9 +3254,10 @@ window.openValuesOverview = openValuesOverview;
 window.closeValueInfo = closeValueInfo;
 window.reopenGameIntro = reopenGameIntro;
 window.triggerAbility = triggerAbility;
-window.showEnding = showEnding;
+window.showEnding = handlePaktPrimaryAction;
 window.showPaxEnding = showPaxEnding;
 window.resetGame = resetGame;
+window.submitPaktVote = submitPaktVote;
 window.startRelayHost = startRelayHost;
 window.joinRelayGame = joinRelayGame;
 window.requestMultiplayerSync = requestMultiplayerSync;

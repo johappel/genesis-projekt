@@ -45,6 +45,9 @@ export function createGame(): GameState {
     protokoll: [],
     linsenUsed: {},
     usedLensIdsByRole: {},
+    paktSubmissionsByRole: {},
+    paktArticleVotesByArticle: {},
+    paktWinnersByArticle: {},
     pakt: {},
   };
 }

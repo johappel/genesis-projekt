@@ -274,7 +274,7 @@
           <div class="finale-title">Der Genesis-Pakt</div>
           <p style="color:var(--text-dim);line-height:1.7">Du hast alle sieben Fälle entschieden. Nun formuliere deinen persönlichen KI-Ethik-Pakt.</p>
         </div>
-        <div class="panel">
+        <div class="panel" id="pakt-form-panel">
           <div style="font-size:1.15em;font-weight:bold;color:var(--gold);margin-bottom:18px">✍️ Formuliere deine fünf Artikel</div>
           <div class="pakt-article">
             <div class="pakt-article-title">📖 Artikel 1: Menschenbild</div>
@@ -302,11 +302,12 @@
             <textarea class="pakt-input" id="pakt-5" placeholder="Verboten oder besonders kontrolliert werden muss ..."></textarea>
           </div>
         </div>
-        <div class="text-center">
-          <button class="btn btn-gold" onclick="showEnding()" style="padding:14px 38px;font-size:1.05em">
+        <div class="text-center" id="pakt-primary-actions">
+          <button class="btn btn-gold" id="pakt-primary-button" onclick="showEnding()" style="padding:14px 38px;font-size:1.05em">
             📜 Genesis-Pakt besiegeln &amp; Auswertung →
           </button>
         </div>
+        <div id="pakt-multiplayer-panel" class="hidden"></div>
       </div>
     </div>
 

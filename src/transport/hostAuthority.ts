@@ -1,13 +1,23 @@
 import { TransportEventFactory } from './eventFactory.js';
 import { createGame } from '../game/engine/createGame.js';
+import {
+  deriveResolvedPakt,
+  haveAllActiveRolesSubmittedPakt,
+  isCompletePaktSubmission,
+  isPaktScoringRequired,
+  normalizePaktAnswers,
+} from '../game/engine/pakt.js';
 import { getNextPendingRole, haveAllActiveRolesVoted } from '../game/engine/voting.js';
 import { MULTIPLAYER_TUNING } from './config.js';
 import { GAMEPLAY_TIMING } from '../game/config.js';
 import { LENSES } from '../game/data/lenses.js';
+import type { PaktArticleId, PaktArticleVote, PaktSubmission } from '../game/types.js';
 import type { EphemeralTransportSession } from './session.js';
 import type {
   GameResetEvent,
   LensSelectedEvent,
+  PaktSubmittedEvent,
+  PaktVotedEvent,
   PendingRoundCloseState,
   RoleClaimedEvent,
   RoundClosedEvent,
@@ -53,6 +63,10 @@ export class HostAuthority {
   private readonly acceptedRoleOwners: Record<string, string> = {};
 
   private readonly acceptedLensSelectionsByRound: Record<string, LensSelectedEvent> = {};
+
+  private readonly acceptedPaktSubmissionsByRole: Record<string, PaktSubmittedEvent> = {};
+
+  private readonly acceptedPaktVotesByArticle: Partial<Record<PaktArticleId, Record<string, PaktVotedEvent>>> = {};
 
   private readonly acceptedVotesByPhase: Record<string, Record<string, VoteCastEvent>> = {};
 
@@ -106,6 +120,16 @@ export class HostAuthority {
 
       if (event.eventName === 'game-reset' && event.resetStatus === 'requested') {
         void this.handleGameResetRequested(event);
+        return;
+      }
+
+      if (event.eventName === 'pakt-submitted' && event.submitStatus === 'requested') {
+        void this.handlePaktSubmittedRequested(event);
+        return;
+      }
+
+      if (event.eventName === 'pakt-voted' && event.voteStatus === 'requested') {
+        void this.handlePaktVotedRequested(event);
         return;
       }
 
@@ -214,6 +238,8 @@ export class HostAuthority {
 
     let mergedState = {
       ...snapshot.state,
+      paktSubmissionsByRole: mergeAcceptedPaktSubmissions(snapshot.state.paktSubmissionsByRole, this.acceptedPaktSubmissionsByRole),
+      paktArticleVotesByArticle: mergeAcceptedPaktVotes(snapshot.state.paktArticleVotesByArticle, this.acceptedPaktVotesByArticle),
       selectedLens: acceptedLensSelection
         ? LENSES.find((lens) => lens.id === acceptedLensSelection.lensId) ?? snapshot.state.selectedLens
         : snapshot.state.selectedLens,
@@ -224,6 +250,13 @@ export class HostAuthority {
         ...snapshot.state.roundVotes,
         ...authoritativeRoundVotes,
       },
+    };
+
+    const resolvedPakt = deriveResolvedPakt(mergedState);
+    mergedState = {
+      ...mergedState,
+      pakt: resolvedPakt.finalPakt,
+      paktWinnersByArticle: resolvedPakt.winnersByArticle,
     };
 
     if (Object.keys(authoritativeRoundVotes).length > 0 && !haveAllActiveRolesVoted(mergedState)) {
@@ -264,6 +297,57 @@ export class HostAuthority {
 
   private async handleGameResetRequested(event: GameResetEvent): Promise<void> {
     await this.publishGameReset(event.requestedByPlayerId);
+  }
+
+  private async handlePaktSubmittedRequested(event: PaktSubmittedEvent): Promise<void> {
+    const normalizedAnswers = normalizePaktAnswers(event.answers);
+    const resolution = this.resolvePaktSubmission({
+      ...event,
+      answers: normalizedAnswers,
+    });
+    const response = this.eventFactory.createPaktSubmittedResolved({
+      roundId: this.getCurrentRoundId(),
+      submittedByRoleId: event.submittedByRoleId,
+      submittedByPlayerId: event.submittedByPlayerId,
+      answers: normalizedAnswers,
+      submitStatus: resolution.submitStatus,
+      rejectionReason: resolution.rejectionReason,
+    });
+
+    if (resolution.submitStatus === 'accepted') {
+      this.acceptedPaktSubmissionsByRole[event.submittedByRoleId] = response;
+    }
+
+    await this.bus.publish(response);
+    if (resolution.submitStatus === 'accepted') {
+      this.scheduleFollowupStateSync();
+    }
+  }
+
+  private async handlePaktVotedRequested(event: PaktVotedEvent): Promise<void> {
+    const resolution = this.resolvePaktVote(event);
+    const response = this.eventFactory.createPaktVotedResolved({
+      roundId: this.getCurrentRoundId(),
+      articleId: event.articleId,
+      votedByRoleId: event.votedByRoleId,
+      votedByPlayerId: event.votedByPlayerId,
+      twoPointsRoleId: event.twoPointsRoleId,
+      onePointRoleId: event.onePointRoleId,
+      voteStatus: resolution.voteStatus,
+      rejectionReason: resolution.rejectionReason,
+    });
+
+    if (resolution.voteStatus === 'accepted') {
+      this.acceptedPaktVotesByArticle[event.articleId] = {
+        ...(this.acceptedPaktVotesByArticle[event.articleId] ?? {}),
+        [event.votedByRoleId]: response,
+      };
+    }
+
+    await this.bus.publish(response);
+    if (resolution.voteStatus === 'accepted') {
+      this.scheduleFollowupStateSync();
+    }
   }
 
   private async handleLensSelectedRequested(event: LensSelectedEvent): Promise<void> {
@@ -355,6 +439,14 @@ export class HostAuthority {
 
     for (const roundId of Object.keys(this.acceptedLensSelectionsByRound)) {
       delete this.acceptedLensSelectionsByRound[roundId];
+    }
+
+    for (const roleId of Object.keys(this.acceptedPaktSubmissionsByRole)) {
+      delete this.acceptedPaktSubmissionsByRole[roleId];
+    }
+
+    for (const articleId of Object.keys(this.acceptedPaktVotesByArticle) as PaktArticleId[]) {
+      delete this.acceptedPaktVotesByArticle[articleId];
     }
 
     for (const phaseKey of Object.keys(this.acceptedVotesByPhase)) {
@@ -486,6 +578,126 @@ export class HostAuthority {
 
     return {
       selectionStatus: 'accepted',
+    };
+  }
+
+  private resolvePaktSubmission(event: PaktSubmittedEvent): {
+    submitStatus: 'accepted' | 'rejected';
+    rejectionReason?: PaktSubmittedEvent['rejectionReason'];
+  } {
+    if (event.roundId !== this.getCurrentRoundId()) {
+      return {
+        submitStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
+    const snapshot = this.getMergedSnapshot();
+    const ownerPlayerId = snapshot.roleOwners[event.submittedByRoleId];
+    if (!ownerPlayerId) {
+      return {
+        submitStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_CLAIMED',
+      };
+    }
+
+    if (ownerPlayerId !== event.playerId || event.submittedByPlayerId !== event.playerId) {
+      return {
+        submitStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_OWNED',
+      };
+    }
+
+    if (!isCompletePaktSubmission(event.answers)) {
+      return {
+        submitStatus: 'rejected',
+        rejectionReason: 'EMPTY_ANSWER',
+      };
+    }
+
+    if (snapshot.state.paktSubmissionsByRole[event.submittedByRoleId] || this.acceptedPaktSubmissionsByRole[event.submittedByRoleId]) {
+      return {
+        submitStatus: 'rejected',
+        rejectionReason: 'PAKT_ALREADY_SUBMITTED',
+      };
+    }
+
+    return {
+      submitStatus: 'accepted',
+    };
+  }
+
+  private resolvePaktVote(event: PaktVotedEvent): {
+    voteStatus: 'accepted' | 'rejected';
+    rejectionReason?: PaktVotedEvent['rejectionReason'];
+  } {
+    if (event.roundId !== this.getCurrentRoundId()) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROUND_MISMATCH',
+      };
+    }
+
+    const snapshot = this.getMergedSnapshot();
+    const ownerPlayerId = snapshot.roleOwners[event.votedByRoleId];
+    if (!ownerPlayerId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_CLAIMED',
+      };
+    }
+
+    if (ownerPlayerId !== event.playerId || event.votedByPlayerId !== event.playerId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ROLE_NOT_OWNED',
+      };
+    }
+
+    if (!haveAllActiveRolesSubmittedPakt(snapshot.state)) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'PAKT_NOT_READY',
+      };
+    }
+
+    if (!isPaktScoringRequired(snapshot.state)) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'INSUFFICIENT_CANDIDATES',
+      };
+    }
+
+    if (snapshot.state.paktArticleVotesByArticle[event.articleId]?.[event.votedByRoleId] || this.acceptedPaktVotesByArticle[event.articleId]?.[event.votedByRoleId]) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'ARTICLE_ALREADY_VOTED',
+      };
+    }
+
+    if (event.twoPointsRoleId === event.onePointRoleId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'DUPLICATE_TARGET',
+      };
+    }
+
+    if (!snapshot.state.paktSubmissionsByRole[event.twoPointsRoleId] || !snapshot.state.paktSubmissionsByRole[event.onePointRoleId]) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'SUBMISSION_MISSING',
+      };
+    }
+
+    if (event.twoPointsRoleId === event.votedByRoleId || event.onePointRoleId === event.votedByRoleId) {
+      return {
+        voteStatus: 'rejected',
+        rejectionReason: 'SELF_VOTE',
+      };
+    }
+
+    return {
+      voteStatus: 'accepted',
     };
   }
 
@@ -683,6 +895,56 @@ function createDefaultResetSnapshot(): StateSnapshot {
     phaseStartedAt: null,
     pendingRoundClose: null,
   };
+}
+
+function mergeAcceptedPaktSubmissions(
+  base: Record<string, PaktSubmission>,
+  accepted: Record<string, PaktSubmittedEvent>
+): Record<string, PaktSubmission> {
+  return {
+    ...base,
+    ...Object.fromEntries(
+      Object.values(accepted).map((event) => [
+        event.submittedByRoleId,
+        {
+          roleId: event.submittedByRoleId,
+          playerId: event.submittedByPlayerId,
+          answers: event.answers,
+          submittedAt: event.sentAt,
+        } satisfies PaktSubmission,
+      ])
+    ),
+  };
+}
+
+function mergeAcceptedPaktVotes(
+  base: StateSnapshot['state']['paktArticleVotesByArticle'],
+  accepted: Partial<Record<PaktArticleId, Record<string, PaktVotedEvent>>>
+): StateSnapshot['state']['paktArticleVotesByArticle'] {
+  const merged: Partial<Record<PaktArticleId, Record<string, PaktArticleVote>>> = {
+    ...base,
+  };
+
+  for (const articleId of Object.keys(accepted) as PaktArticleId[]) {
+    merged[articleId] = {
+      ...(base[articleId] ?? {}),
+      ...Object.fromEntries(
+        Object.values(accepted[articleId] ?? {}).map((event) => [
+          event.votedByRoleId,
+          {
+            articleId: event.articleId,
+            votedByRoleId: event.votedByRoleId,
+            votedByPlayerId: event.votedByPlayerId,
+            twoPointsRoleId: event.twoPointsRoleId,
+            onePointRoleId: event.onePointRoleId,
+            submittedAt: event.sentAt,
+          } satisfies PaktArticleVote,
+        ])
+      ),
+    };
+  }
+
+  return merged;
 }
 
 function getLensInitiativeRole(state: StateSnapshot['state']): StateSnapshot['state']['selectedRole'] {

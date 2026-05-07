@@ -2,6 +2,8 @@ import type {
   GameCreatedEvent,
   GameResetEvent,
   LensSelectedEvent,
+  PaktSubmittedEvent,
+  PaktVotedEvent,
   PhaseOpenedEvent,
   RoundClosedEvent,
   RoleClaimedEvent,
@@ -67,6 +69,82 @@ export class TransportEventFactory {
       resetStatus: 'accepted',
       authoritativePlayerId: this.clientInfo.playerId,
       snapshot: params.snapshot,
+    };
+  }
+
+  createPaktSubmittedRequested(params: {
+    roundId: string;
+    submittedByRoleId: string;
+    answers: PaktSubmittedEvent['answers'];
+  }): PaktSubmittedEvent {
+    return {
+      ...this.createEnvelope<'pakt-submitted'>('pakt-submitted', params.roundId),
+      submittedByRoleId: params.submittedByRoleId,
+      submittedByPlayerId: this.clientInfo.playerId,
+      answers: params.answers,
+      submitStatus: 'requested',
+    };
+  }
+
+  createPaktSubmittedResolved(params: {
+    roundId: string;
+    submittedByRoleId: string;
+    submittedByPlayerId: string;
+    answers: PaktSubmittedEvent['answers'];
+    submitStatus: 'accepted' | 'rejected';
+    rejectionReason?: PaktSubmittedEvent['rejectionReason'];
+  }): PaktSubmittedEvent {
+    return {
+      ...this.createEnvelope<'pakt-submitted'>('pakt-submitted', params.roundId),
+      playerId: params.submittedByPlayerId,
+      submittedByRoleId: params.submittedByRoleId,
+      submittedByPlayerId: params.submittedByPlayerId,
+      answers: params.answers,
+      submitStatus: params.submitStatus,
+      authoritativePlayerId: this.clientInfo.playerId,
+      rejectionReason: params.rejectionReason,
+    };
+  }
+
+  createPaktVotedRequested(params: {
+    roundId: string;
+    articleId: PaktVotedEvent['articleId'];
+    votedByRoleId: string;
+    twoPointsRoleId: string;
+    onePointRoleId: string;
+  }): PaktVotedEvent {
+    return {
+      ...this.createEnvelope<'pakt-voted'>('pakt-voted', params.roundId),
+      articleId: params.articleId,
+      votedByRoleId: params.votedByRoleId,
+      votedByPlayerId: this.clientInfo.playerId,
+      twoPointsRoleId: params.twoPointsRoleId,
+      onePointRoleId: params.onePointRoleId,
+      voteStatus: 'requested',
+    };
+  }
+
+  createPaktVotedResolved(params: {
+    roundId: string;
+    articleId: PaktVotedEvent['articleId'];
+    votedByRoleId: string;
+    votedByPlayerId: string;
+    twoPointsRoleId: string;
+    onePointRoleId: string;
+    voteStatus: 'accepted' | 'rejected';
+    rejectionReason?: PaktVotedEvent['rejectionReason'];
+  }): PaktVotedEvent {
+    return {
+      ...this.createEnvelope<'pakt-voted'>('pakt-voted', params.roundId),
+      playerId: params.votedByPlayerId,
+      articleId: params.articleId,
+      votedByRoleId: params.votedByRoleId,
+      votedByPlayerId: params.votedByPlayerId,
+      twoPointsRoleId: params.twoPointsRoleId,
+      onePointRoleId: params.onePointRoleId,
+      voteStatus: params.voteStatus,
+      authoritativePlayerId: this.clientInfo.playerId,
+      rejectionReason: params.rejectionReason,
     };
   }
 

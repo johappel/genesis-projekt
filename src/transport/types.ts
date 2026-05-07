@@ -1,8 +1,10 @@
-import type { GameState } from '../game/types.js';
+import type { GameState, PaktArticleId } from '../game/types.js';
 
 export type TransportEventName =
   | 'game-created'
   | 'game-reset'
+  | 'pakt-submitted'
+  | 'pakt-voted'
   | 'phase-opened'
   | 'lens-selected'
   | 'role-claimed'
@@ -58,6 +60,28 @@ export interface GameResetEvent extends TransportEnvelope {
   resetStatus: 'requested' | 'accepted';
   authoritativePlayerId?: string;
   snapshot?: StateSnapshot;
+}
+
+export interface PaktSubmittedEvent extends TransportEnvelope {
+  eventName: 'pakt-submitted';
+  submittedByRoleId: string;
+  submittedByPlayerId: string;
+  answers: Record<PaktArticleId, string>;
+  submitStatus: 'requested' | 'accepted' | 'rejected';
+  authoritativePlayerId?: string;
+  rejectionReason?: 'ROUND_MISMATCH' | 'ROLE_NOT_CLAIMED' | 'ROLE_NOT_OWNED' | 'PAKT_ALREADY_SUBMITTED' | 'EMPTY_ANSWER';
+}
+
+export interface PaktVotedEvent extends TransportEnvelope {
+  eventName: 'pakt-voted';
+  articleId: PaktArticleId;
+  votedByRoleId: string;
+  votedByPlayerId: string;
+  twoPointsRoleId: string;
+  onePointRoleId: string;
+  voteStatus: 'requested' | 'accepted' | 'rejected';
+  authoritativePlayerId?: string;
+  rejectionReason?: 'ROUND_MISMATCH' | 'ROLE_NOT_CLAIMED' | 'ROLE_NOT_OWNED' | 'PAKT_NOT_READY' | 'ARTICLE_ALREADY_VOTED' | 'SELF_VOTE' | 'DUPLICATE_TARGET' | 'SUBMISSION_MISSING' | 'INSUFFICIENT_CANDIDATES';
 }
 
 export interface PhaseOpenedEvent extends TransportEnvelope {
@@ -132,6 +156,8 @@ export interface StateSyncSentEvent extends TransportEnvelope {
 export type TransportEvent =
   | GameCreatedEvent
   | GameResetEvent
+  | PaktSubmittedEvent
+  | PaktVotedEvent
   | PhaseOpenedEvent
   | LensSelectedEvent
   | RoleClaimedEvent

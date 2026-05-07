@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createGame } from '../src/game/engine/createGame.js';
+import { PAKT_ARTICLE_IDS } from '../src/game/engine/pakt.js';
 import { ROLES } from '../src/game/data/roles.js';
 import { LENSES } from '../src/game/data/lenses.js';
 import { TransportEventFactory } from '../src/transport/eventFactory.js';
@@ -10,6 +11,7 @@ import { createEphemeralTransportSession } from '../src/transport/session.js';
 import { toRelayWebSocketUrl } from '../src/transport/nostrRelayBus.js';
 import { createRelayJoinUrl, formatRelayIssueMessage, readMultiplayerUrlConfig } from '../src/transport/runtime.js';
 import type { StateSnapshot, TransportEvent } from '../src/transport/types.js';
+import type { PaktArticleId } from '../src/game/types.js';
 
 function createResetSnapshot(): StateSnapshot {
   return {
@@ -19,6 +21,12 @@ function createResetSnapshot(): StateSnapshot {
     phaseStartedAt: null,
     pendingRoundClose: null,
   };
+}
+
+function createPaktAnswers(prefix: string): Record<PaktArticleId, string> {
+  return Object.fromEntries(
+    PAKT_ARTICLE_IDS.map((articleId, index) => [articleId, `${prefix} Artikel ${index + 1}`])
+  ) as Record<PaktArticleId, string>;
 }
 
 const BASE_EVENT: TransportEvent = {
@@ -1253,6 +1261,290 @@ describe('LocalBus', () => {
       roundCloseStatus: 'accepted',
       resolvedOptionId: 'sophia-1-a',
       authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('uebernimmt im Finale bei zwei Rollen alle eingereichten Pakttexte ohne Bewertungsphase', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const playerA = createEphemeralTransportSession(false);
+    const playerB = createEphemeralTransportSession(false);
+    const roleA = ROLES.find((role) => role.id === 'theologin');
+    const roleB = ROLES.find((role) => role.id === 'juristin');
+    if (!roleA || !roleB) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const factoryA = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerA.clientInfo });
+    const factoryB = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerB.clientInfo });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        currentCase: 7,
+        activeRoles: [roleA, roleB],
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {
+        theologin: playerA.clientInfo.playerId,
+        juristin: playerB.clientInfo.playerId,
+      },
+      phaseStartedAt: null,
+      pendingRoundClose: null,
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
+      getCurrentRoundId: () => 'round-7',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(factoryA.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'theologin', answers: createPaktAnswers('Theologin') }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryB.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'juristin', answers: createPaktAnswers('Juristin') }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryA.createStateSyncRequested({ roundId: 'round-7', knownRoundId: 'round-7', knownSeqByPlayer: {} }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const syncEvent = received.findLast((event) => event.eventName === 'state-sync-sent');
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        state: {
+          paktWinnersByArticle: {
+            'artikel-1': ['theologin', 'juristin'],
+          },
+          pakt: {
+            'artikel-1': 'Theologin Artikel 1\n\nJuristin Artikel 1',
+          },
+        },
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('lehnt im Finale Selbstwahl bei der Pakt-Wertung ab', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const playerA = createEphemeralTransportSession(false);
+    const playerB = createEphemeralTransportSession(false);
+    const playerC = createEphemeralTransportSession(false);
+    const roles = [
+      ROLES.find((role) => role.id === 'theologin'),
+      ROLES.find((role) => role.id === 'juristin'),
+      ROLES.find((role) => role.id === 'buergerin'),
+    ];
+    if (roles.some((role) => !role)) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const [roleA, roleB, roleC] = roles;
+    const factoryA = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerA.clientInfo });
+    const factoryB = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerB.clientInfo });
+    const factoryC = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerC.clientInfo });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        currentCase: 7,
+        activeRoles: [roleA!, roleB!, roleC!],
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {
+        theologin: playerA.clientInfo.playerId,
+        juristin: playerB.clientInfo.playerId,
+        buergerin: playerC.clientInfo.playerId,
+      },
+      phaseStartedAt: null,
+      pendingRoundClose: null,
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
+      getCurrentRoundId: () => 'round-7',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(factoryA.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'theologin', answers: createPaktAnswers('A') }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryB.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'juristin', answers: createPaktAnswers('B') }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryC.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'buergerin', answers: createPaktAnswers('C') }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(factoryA.createPaktVotedRequested({
+      roundId: 'round-7',
+      articleId: 'artikel-1',
+      votedByRoleId: 'theologin',
+      twoPointsRoleId: 'theologin',
+      onePointRoleId: 'juristin',
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rejectedVote = received.findLast(
+      (event) => event.eventName === 'pakt-voted' && event.voteStatus === 'rejected'
+    );
+    expect(rejectedVote).toMatchObject({
+      eventName: 'pakt-voted',
+      voteStatus: 'rejected',
+      rejectionReason: 'SELF_VOTE',
+      authoritativePlayerId: hostSession.clientInfo.playerId,
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('ermittelt nach vollstaendiger Pakt-Wertung den Siegertext je Artikel', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const playerA = createEphemeralTransportSession(false);
+    const playerB = createEphemeralTransportSession(false);
+    const playerC = createEphemeralTransportSession(false);
+    const roles = [
+      ROLES.find((role) => role.id === 'theologin'),
+      ROLES.find((role) => role.id === 'juristin'),
+      ROLES.find((role) => role.id === 'buergerin'),
+    ];
+    if (roles.some((role) => !role)) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const [roleA, roleB, roleC] = roles;
+    const factoryA = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerA.clientInfo });
+    const factoryB = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerB.clientInfo });
+    const factoryC = new TransportEventFactory({ gameId: 'game-1', clientInfo: playerC.clientInfo });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        currentCase: 7,
+        activeRoles: [roleA!, roleB!, roleC!],
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {
+        theologin: playerA.clientInfo.playerId,
+        juristin: playerB.clientInfo.playerId,
+        buergerin: playerC.clientInfo.playerId,
+      },
+      phaseStartedAt: null,
+      pendingRoundClose: null,
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
+      getCurrentRoundId: () => 'round-7',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(factoryA.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'theologin', answers: createPaktAnswers('A') }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryB.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'juristin', answers: createPaktAnswers('B') }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(factoryC.createPaktSubmittedRequested({ roundId: 'round-7', submittedByRoleId: 'buergerin', answers: createPaktAnswers('C') }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    for (const articleId of PAKT_ARTICLE_IDS) {
+      await bus.publish(factoryA.createPaktVotedRequested({
+        roundId: 'round-7',
+        articleId,
+        votedByRoleId: 'theologin',
+        twoPointsRoleId: 'juristin',
+        onePointRoleId: 'buergerin',
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await bus.publish(factoryB.createPaktVotedRequested({
+        roundId: 'round-7',
+        articleId,
+        votedByRoleId: 'juristin',
+        twoPointsRoleId: 'theologin',
+        onePointRoleId: 'buergerin',
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await bus.publish(factoryC.createPaktVotedRequested({
+        roundId: 'round-7',
+        articleId,
+        votedByRoleId: 'buergerin',
+        twoPointsRoleId: 'juristin',
+        onePointRoleId: 'theologin',
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    await bus.publish(factoryA.createStateSyncRequested({ roundId: 'round-7', knownRoundId: 'round-7', knownSeqByPlayer: {} }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const syncEvent = received.findLast((event) => event.eventName === 'state-sync-sent');
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        state: {
+          paktWinnersByArticle: {
+            'artikel-1': ['juristin'],
+          },
+          pakt: {
+            'artikel-1': 'B Artikel 1',
+          },
+        },
+      },
     });
 
     hostAuthority.stop();
