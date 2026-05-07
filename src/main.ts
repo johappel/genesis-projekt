@@ -51,6 +51,9 @@ let multiplayerStatusMessage = MULTIPLAYER_CONFIG
     : 'Verbinde mit bestehendem Relay-Raum.'
   : '';
 const MULTIPLAYER_RECOVERY_TIMEOUT_MS = MULTIPLAYER_TUNING.recoveryTimeoutMs;
+const PAKT_DRAFT_STORAGE_KEY = MULTIPLAYER_CONFIG
+  ? `genesis:pakt-draft:${MULTIPLAYER_CONFIG.mode}:${MULTIPLAYER_CONFIG.gameId}:${MULTIPLAYER_CONFIG.relayUrl}`
+  : 'genesis:pakt-draft:local';
 
 type LocalStartMode = 'singleplayer' | 'same-device';
 
@@ -430,6 +433,7 @@ function clearPendingMultiplayerRequest(): void {
 function applyFreshGameReset(nextState: GameState): void {
   clearPendingMultiplayerRequest();
   resetTransientMultiplayerUi();
+  clearPaktDraft();
   state = nextState;
   clearTimer();
   timerRemaining = GAMEPLAY_RUNTIME_TIMING.decisionTimerSeconds;
@@ -443,6 +447,98 @@ function applyFreshGameReset(nextState: GameState): void {
   updateRoleFlowAfterTransport();
   initRolesScreen();
   showScreen('screen-roles');
+}
+
+function getCurrentEndingFromState(): typeof ENDINGS[number] {
+  const allVals = {
+    ...state.values,
+    macht: state.macht,
+  };
+
+  return ENDINGS.find((entry) => entry.condition(allVals)) ?? ENDINGS[ENDINGS.length - 1];
+}
+
+function hasSubmittedPakt(currentState: GameState): boolean {
+  return Object.values(currentState.pakt).some((value) => value.trim().length > 0);
+}
+
+function readPaktDraft(): Record<string, string> {
+  try {
+    const stored = sessionStorage.getItem(PAKT_DRAFT_STORAGE_KEY);
+    if (!stored) {
+      return {};
+    }
+
+    const parsed = JSON.parse(stored) as Record<string, string>;
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePaktDraft(pakt: Record<string, string>): void {
+  try {
+    if (!Object.values(pakt).some((value) => value.trim().length > 0)) {
+      sessionStorage.removeItem(PAKT_DRAFT_STORAGE_KEY);
+      return;
+    }
+
+    sessionStorage.setItem(PAKT_DRAFT_STORAGE_KEY, JSON.stringify(pakt));
+  } catch {
+    // Ignore sessionStorage failures and keep the form usable.
+  }
+}
+
+function clearPaktDraft(): void {
+  try {
+    sessionStorage.removeItem(PAKT_DRAFT_STORAGE_KEY);
+  } catch {
+    // Ignore sessionStorage failures and keep reset flow intact.
+  }
+}
+
+function readPaktInputs(): Record<string, string> {
+  const pakt: Record<string, string> = {};
+  for (let i = 1; i <= 5; i += 1) {
+    const el = document.getElementById(`pakt-${i}`) as HTMLTextAreaElement | null;
+    pakt[`artikel-${i}`] = el?.value.trim() ?? '';
+  }
+  return pakt;
+}
+
+function syncPaktInputsFromState(): void {
+  const values = hasSubmittedPakt(state) ? state.pakt : readPaktDraft();
+  for (let i = 1; i <= 5; i += 1) {
+    const el = document.getElementById(`pakt-${i}`) as HTMLTextAreaElement | null;
+    if (!el) {
+      continue;
+    }
+
+    el.value = values[`artikel-${i}`] ?? '';
+  }
+}
+
+function bindPaktDraftInputs(): void {
+  document.querySelectorAll<HTMLTextAreaElement>('.pakt-input').forEach((input) => {
+    input.addEventListener('input', () => {
+      if (hasSubmittedPakt(state)) {
+        return;
+      }
+
+      writePaktDraft(readPaktInputs());
+    });
+  });
+}
+
+function restoreFinalScreenFromState(): void {
+  if (hasSubmittedPakt(state)) {
+    renderEndScreen(getCurrentEndingFromState());
+    showScreen('screen-end');
+    return;
+  }
+
+  syncPaktInputsFromState();
+  showScreen('screen-finale');
 }
 
 function isAwaitingVoteConfirmation(): boolean {
@@ -1012,6 +1108,20 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
     syncRoleSelectionFromOwners();
     updateRoleFlowAfterTransport();
 
+    if (state.currentCase >= CASES.length) {
+      restoreFinalScreenFromState();
+      if (multiplayer?.isHost && event.authoritativePlayerId === multiplayer.playerId) {
+        return;
+      }
+
+      setMultiplayerStatus(
+        hasSubmittedPakt(state)
+          ? 'State-Sync empfangen. Die gemeinsame Auswertung wurde wiederhergestellt.'
+          : 'State-Sync empfangen. Das Pakt-Formular wurde wiederhergestellt.'
+      );
+      return;
+    }
+
     const shouldOpenGameScreen = activeScreenBeforeSync === 'screen-game'
       || Boolean(event.snapshot.pendingRoundClose)
       || Boolean(state.selectedRole);
@@ -1195,6 +1305,9 @@ function showScreen(id: string): void {
   });
   const screen = document.getElementById(id);
   if (!screen) return;
+  if (id === 'screen-finale') {
+    syncPaktInputsFromState();
+  }
   screen.style.display = 'block';
   screen.classList.add('active');
   window.scrollTo(0, 0);
@@ -2534,19 +2647,12 @@ function reopenGameIntro(): void {
 // FINALE & ENDSCREEN
 // ============================================================
 function showEnding(): void {
-  const pakt: Record<string, string> = {};
-  for (let i = 1; i <= 5; i++) {
-    const el = document.getElementById(`pakt-${i}`) as HTMLTextAreaElement | null;
-    pakt[`artikel-${i}`] = el?.value.trim() ?? '';
-  }
+  const pakt = readPaktInputs();
   state = { ...state, pakt };
+  clearPaktDraft();
 
   // Passendes Ende ermitteln
-  const allVals = {
-    ...state.values,
-    macht: state.macht,
-  };
-  const ending = ENDINGS.find((e) => e.condition(allVals)) ?? ENDINGS[ENDINGS.length - 1];
+  const ending = getCurrentEndingFromState();
 
   renderEndScreen(ending);
   showScreen('screen-end');
@@ -2725,6 +2831,7 @@ if (MULTIPLAYER_CONFIG) {
 }
 
 initializeNostrModal();
+bindPaktDraftInputs();
 initRolesScreen();
 updateMultiplayerStatusUI();
 showScreen(MULTIPLAYER_CONFIG ? 'screen-roles' : 'screen-start');
