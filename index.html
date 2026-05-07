@@ -24,31 +24,52 @@
         <br><br>
         <em style="color:var(--text-dim)">Ein ethisch-theologisches Entscheidungsspiel über KI, Verantwortung und die Zukunft des Menschen.</em>
       </div>
-      <button class="btn btn-primary" onclick="showScreen('screen-intro')" style="font-size:1.1em;padding:17px 38px">
-        🚀 Spiel beginnen
-      </button>
-      <div class="panel max-800" style="margin:24px auto 0;text-align:left">
-        <div style="font-weight:bold;color:var(--gold);margin-bottom:10px">🛰️ Relay-Mehrspieler</div>
-        <div style="font-size:0.9em;line-height:1.6;color:var(--text-dim);margin-bottom:12px">Host oder Join laufen über Raumcode plus Relay-URL. Standard ist das lokale Test-Relay auf localhost:7000.</div>
-        <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:12px">
-          <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
-            Relay-URL
-            <input id="multiplayer-relay-input" type="text" value="http://localhost:7000/" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
-          </label>
-          <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
-            Raumcode
-            <input id="multiplayer-game-input" type="text" placeholder="z. B. genesis-raum" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
-          </label>
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
-          <button class="btn btn-secondary" onclick="startRelayHost()">Raum hosten</button>
-          <button class="btn btn-secondary" onclick="joinRelayGame()">Raum beitreten</button>
-        </div>
-        <div id="multiplayer-status" style="font-size:0.82em;color:var(--text-dim)">Kein Relay-Mehrspieler aktiv.</div>
+      <div class="start-mode-grid">
+        <button class="start-mode-card start-mode-primary" onclick="startLocalSession('singleplayer')" type="button">
+          <span class="start-mode-title">Singleplayer</span>
+          <span class="start-mode-copy">Du steuerst die Ratsrunde lokal selbst und uebernimmst die Stimmen nacheinander.</span>
+        </button>
+        <button class="start-mode-card" onclick="startLocalSession('same-device')" type="button">
+          <span class="start-mode-title">Multiplayer am selben Gerät</span>
+          <span class="start-mode-copy">Mehrere Personen teilen ein Gerät und geben ihre Ratsstimmen nacheinander ab.</span>
+        </button>
+        <button class="start-mode-card" onclick="openNostrModal()" type="button">
+          <span class="start-mode-title">Multiplayer via Nostr</span>
+          <span class="start-mode-copy">Raum hosten oder beitreten. Relay, Raumcode und Join-Link laufen über ein Modal.</span>
+        </button>
       </div>
       <div style="margin-top:18px;font-size:0.82em;color:var(--text-dim)">
         Für Unterricht | Jugendbildung | Ethik-Seminare
         <br>OER-Lizenz: <a style="color:var(--text-dim)" href="https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0 (Public Domain)</a>
+      </div>
+    </div>
+
+    <div id="nostr-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeNostrModal()">
+      <div class="modal-panel">
+        <div class="modal-header">
+          <div>
+            <div class="modal-title">🛰️ Multiplayer via Nostr</div>
+            <div class="modal-copy">Relay-Mehrspieler läuft über Raumcode und Relay-URL. Der Standardwert kommt jetzt aus der zentralen Transport-Config.</div>
+          </div>
+          <button class="modal-close" type="button" onclick="closeNostrModal()">✕</button>
+        </div>
+        <div class="panel" style="margin-bottom:0;text-align:left">
+          <div style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:12px">
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
+              Relay-URL
+              <input id="multiplayer-relay-input" type="text" placeholder="z. B. http://localhost:7000/" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:0.82em;color:var(--text-dim)">
+              Raumcode
+              <input id="multiplayer-game-input" type="text" placeholder="z. B. genesis-a1b2c3" style="padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:var(--text)" />
+            </label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+            <button class="btn btn-secondary" onclick="startRelayHost()" type="button">Raum hosten</button>
+            <button class="btn btn-secondary" onclick="joinRelayGame()" type="button">Raum beitreten</button>
+          </div>
+          <div id="multiplayer-status" style="font-size:0.82em;color:var(--text-dim)">Kein Relay-Mehrspieler aktiv.</div>
+        </div>
       </div>
     </div>
 

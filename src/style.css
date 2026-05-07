@@ -68,6 +68,33 @@ body{
 .start-title{font-size:2.5em;font-weight:bold;color:var(--gold);margin-bottom:8px;text-shadow:0 0 20px rgba(245,166,35,0.5)}
 .start-subtitle{font-size:1.2em;color:var(--text-dim);margin-bottom:36px}
 .start-description{max-width:600px;margin:0 auto 36px;line-height:1.8;font-size:1.05em;text-align:center}
+.start-mode-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;max-width:900px;width:100%;margin:0 auto}
+.start-mode-card{
+  display:flex;flex-direction:column;gap:10px;min-height:160px;padding:20px;border-radius:16px;border:1px solid rgba(255,255,255,0.1);
+  background:linear-gradient(160deg,rgba(22,33,62,0.96),rgba(15,29,54,0.96));color:var(--text);text-align:left;cursor:pointer;
+  transition:transform 0.24s ease,border-color 0.24s ease,box-shadow 0.24s ease,background 0.24s ease;
+}
+.start-mode-card:hover{transform:translateY(-4px);border-color:rgba(245,166,35,0.38);box-shadow:0 18px 36px rgba(0,0,0,0.24)}
+.start-mode-primary{background:linear-gradient(160deg,rgba(233,69,96,0.18),rgba(15,29,54,0.98));border-color:rgba(233,69,96,0.26)}
+.start-mode-title{font-size:1.08em;font-weight:700;color:#f3f4f8}
+.start-mode-copy{font-size:0.9em;line-height:1.6;color:var(--text-dim)}
+
+.modal-overlay{
+  position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:rgba(5,8,18,0.72);backdrop-filter:blur(10px);
+}
+.modal-panel{
+  width:min(720px,100%);border-radius:18px;border:1px solid rgba(255,255,255,0.08);padding:20px;
+  background:linear-gradient(180deg,rgba(17,24,45,0.98),rgba(14,20,38,0.98));box-shadow:0 26px 64px rgba(0,0,0,0.38);
+}
+.modal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+.modal-title{font-size:1.2em;font-weight:700;color:var(--gold);margin-bottom:5px}
+.modal-copy{font-size:0.88em;line-height:1.6;color:var(--text-dim)}
+.modal-close{
+  width:38px;height:38px;border-radius:999px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);
+  color:var(--text);font-size:1em;cursor:pointer;transition:transform 0.2s ease,border-color 0.2s ease;
+}
+.modal-close:hover{transform:translateY(-1px);border-color:rgba(245,166,35,0.4)}
 
 /* ---------- PANELS ---------- */
 .panel{background:var(--secondary);border-radius:12px;padding:20px;border:1px solid var(--border);margin-bottom:18px}

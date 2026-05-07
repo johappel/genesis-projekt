@@ -1,6 +1,6 @@
 import type { GameState } from '../game/types.js';
 
-import { MULTIPLAYER_TUNING } from './config.js';
+import { MULTIPLAYER_DEFAULTS, MULTIPLAYER_TUNING } from './config.js';
 import { TransportEventFactory } from './eventFactory.js';
 import { HostAuthority } from './hostAuthority.js';
 import { NostrRelayBus } from './nostrRelayBus.js';
@@ -14,7 +14,6 @@ import type {
   VoteCastEvent,
 } from './types.js';
 
-const DEFAULT_RELAY_URL = 'http://localhost:7000/';
 const REQUEST_SYNC_DELAY_MS = MULTIPLAYER_TUNING.initialStateSyncDelayMs;
 
 export function formatRelayIssueMessage(relayUrl: string, detail?: string): string {
@@ -53,7 +52,7 @@ export function readMultiplayerUrlConfig(search: string): MultiplayerUrlConfig |
   const params = new URLSearchParams(search);
   const mode = params.get('mp');
   const gameId = params.get('game')?.trim();
-  const relayUrl = params.get('relay')?.trim() || DEFAULT_RELAY_URL;
+  const relayUrl = params.get('relay')?.trim() || MULTIPLAYER_DEFAULTS.relayUrl;
 
   if ((mode !== 'host' && mode !== 'join') || !gameId) {
     return null;

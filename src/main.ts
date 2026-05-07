@@ -28,7 +28,7 @@ import {
   readMultiplayerUrlConfig,
   RelayMultiplayerRuntime,
 } from './transport/runtime.js';
-import { MULTIPLAYER_TUNING } from './transport/config.js';
+import { MULTIPLAYER_DEFAULTS, MULTIPLAYER_TUNING } from './transport/config.js';
 import type { TransportEvent } from './transport/types.js';
 
 // ============================================================
@@ -51,6 +51,10 @@ let multiplayerStatusMessage = MULTIPLAYER_CONFIG
     : 'Verbinde mit bestehendem Relay-Raum.'
   : '';
 const MULTIPLAYER_RECOVERY_TIMEOUT_MS = MULTIPLAYER_TUNING.recoveryTimeoutMs;
+
+type LocalStartMode = 'singleplayer' | 'same-device';
+
+let localStartMode: LocalStartMode = 'singleplayer';
 
 type PendingMultiplayerRequestKind = 'role-claim' | 'lens-select' | 'vote' | 'round-close';
 
@@ -536,6 +540,32 @@ function updateMultiplayerStatusUI(): void {
   roomBox.classList.remove('hidden');
   roomCode.value = MULTIPLAYER_CONFIG.gameId;
   inviteLink.value = createRelayJoinUrl(window.location.href, MULTIPLAYER_CONFIG);
+}
+
+function getConfiguredRelayUrl(): string {
+  const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
+  return relayInput?.value.trim() || MULTIPLAYER_DEFAULTS.relayUrl;
+}
+
+function initializeNostrModal(): void {
+  const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
+  if (relayInput && !relayInput.value.trim()) {
+    relayInput.value = MULTIPLAYER_DEFAULTS.relayUrl;
+  }
+}
+
+function openNostrModal(): void {
+  initializeNostrModal();
+  document.getElementById('nostr-modal')?.classList.remove('hidden');
+}
+
+function closeNostrModal(): void {
+  document.getElementById('nostr-modal')?.classList.add('hidden');
+}
+
+function startLocalSession(mode: LocalStartMode): void {
+  localStartMode = mode;
+  showScreen('screen-intro');
 }
 
 function updateRoleFlowAfterTransport(): void {
@@ -1130,19 +1160,17 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
 }
 
 function startRelayHost(): void {
-  const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
-  const relayUrl = relayInput?.value.trim() || 'http://localhost:7000/';
+  const relayUrl = getConfiguredRelayUrl();
   const url = new URL(window.location.href);
   url.searchParams.set('mp', 'host');
-  url.searchParams.set('game', crypto.randomUUID().slice(0, 8));
+  url.searchParams.set('game', `${MULTIPLAYER_DEFAULTS.roomCodePrefix}-${crypto.randomUUID().slice(0, 6)}`);
   url.searchParams.set('relay', relayUrl);
   window.location.href = url.toString();
 }
 
 function joinRelayGame(): void {
-  const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
   const gameInput = document.getElementById('multiplayer-game-input') as HTMLInputElement | null;
-  const relayUrl = relayInput?.value.trim() || 'http://localhost:7000/';
+  const relayUrl = getConfiguredRelayUrl();
   const gameId = gameInput?.value.trim();
 
   if (!gameId) {
@@ -1259,13 +1287,17 @@ function getRoleSelectionHint(): string {
   }
 
   if (!state.activeRoles.length) {
-    return 'Waehle mindestens zwei Rollen fuer eine gemeinsame Ratsrunde.';
+    return localStartMode === 'singleplayer'
+      ? 'Singleplayer: Waehle mindestens zwei Rollen. Du uebernimmst die Ratsstimmen nacheinander selbst.'
+      : 'Multiplayer am selben Geraet: Vergibt mindestens zwei Rollen fuer eure gemeinsame Ratsrunde.';
   }
 
   const names = state.activeRoles.map((role) => role.name).join(', ');
   const suffix = state.activeRoles.length < 2
     ? ' Noch eine Rolle fehlt zum Start.'
-    : ' Runde bereit.';
+    : localStartMode === 'singleplayer'
+      ? ' Singleplayer-Runde bereit.'
+      : ' Runde am selben Geraet bereit.';
   return `${state.activeRoles.length} Rollen aktiv: ${names}.${suffix}`;
 }
 
@@ -2626,6 +2658,9 @@ function resetGame(): void {
 declare global {
   interface Window {
     showScreen: typeof showScreen;
+    startLocalSession: typeof startLocalSession;
+    openNostrModal: typeof openNostrModal;
+    closeNostrModal: typeof closeNostrModal;
     startGame: typeof startGame;
     handleDecision: typeof handleDecision;
     closeConsequence: typeof closeConsequence;
@@ -2644,6 +2679,9 @@ declare global {
 }
 
 window.showScreen = showScreen;
+window.startLocalSession = startLocalSession;
+window.openNostrModal = openNostrModal;
+window.closeNostrModal = closeNostrModal;
 window.startGame = startGame;
 window.handleDecision = handleDecision;
 window.closeConsequence = closeConsequence;
@@ -2686,6 +2724,7 @@ if (MULTIPLAYER_CONFIG) {
   multiplayer.start();
 }
 
+initializeNostrModal();
 initRolesScreen();
 updateMultiplayerStatusUI();
 showScreen(MULTIPLAYER_CONFIG ? 'screen-roles' : 'screen-start');

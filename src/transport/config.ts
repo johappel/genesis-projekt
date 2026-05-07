@@ -1,3 +1,8 @@
+export const MULTIPLAYER_DEFAULTS = {
+  relayUrl: 'http://localhost:7000/',
+  roomCodePrefix: 'genesis',
+} as const;
+
 export const MULTIPLAYER_TUNING = {
   initialStateSyncDelayMs: 80,
   recoveryTimeoutMs: 900,
