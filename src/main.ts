@@ -70,6 +70,14 @@ type LocalStartMode = 'singleplayer' | 'same-device';
 
 let localStartMode: LocalStartMode = 'singleplayer';
 
+function getMinimumRequiredRolesForStart(): number {
+  if (isMultiplayerMode()) {
+    return 2;
+  }
+
+  return localStartMode === 'singleplayer' ? 1 : 2;
+}
+
 type PendingMultiplayerRequestKind = 'role-claim' | 'lens-select' | 'vote' | 'round-close' | 'pakt-submit' | 'pakt-vote';
 
 type QueuedMultiplayerVote = {
@@ -1644,6 +1652,8 @@ function getCurrentRolePosition(): number {
 }
 
 function getRoleSelectionHint(): string {
+  const minimumRequiredRoles = getMinimumRequiredRolesForStart();
+
   if (isMultiplayerMode()) {
     if (!state.activeRoles.length) {
       return 'Claimt mindestens zwei Rollen im Relay-Raum, bevor ihr die erste Runde lokal öffnet.';
@@ -1661,12 +1671,12 @@ function getRoleSelectionHint(): string {
 
   if (!state.activeRoles.length) {
     return localStartMode === 'singleplayer'
-      ? 'Singleplayer: Waehle mindestens zwei Rollen. Du uebernimmst die Ratsstimmen nacheinander selbst.'
+      ? 'Singleplayer: Waehle eine Rolle. Das Spiel startet danach sofort.'
       : 'Multiplayer am selben Geraet: Vergibt mindestens zwei Rollen fuer eure gemeinsame Ratsrunde.';
   }
 
   const names = state.activeRoles.map((role) => role.name).join(', ');
-  const suffix = state.activeRoles.length < 2
+  const suffix = state.activeRoles.length < minimumRequiredRoles
     ? ' Noch eine Rolle fehlt zum Start.'
     : localStartMode === 'singleplayer'
       ? ' Singleplayer-Runde bereit.'
@@ -1675,6 +1685,8 @@ function getRoleSelectionHint(): string {
 }
 
 function updateRoleSelectionUI(): void {
+  const minimumRequiredRoles = getMinimumRequiredRolesForStart();
+
   document.querySelectorAll<HTMLElement>('.role-select-card').forEach((card) => {
     const roleId = card.dataset.roleId ?? '';
     const isSelected = state.activeRoles.some((role) => card.id === `role-card-${role.id}`);
@@ -1701,8 +1713,10 @@ function updateRoleSelectionUI(): void {
   const clientWaitHint = document.getElementById('client-wait-hint');
   const hint = document.getElementById('role-hint');
   const isClient = isMultiplayerMode() && !multiplayer?.isHost;
+  const isSingleplayerAutoStart = !isMultiplayerMode() && localStartMode === 'singleplayer';
   if (btn) {
-    btn.disabled = state.activeRoles.length < 2;
+    btn.classList.toggle('hidden', isSingleplayerAutoStart);
+    btn.disabled = state.activeRoles.length < minimumRequiredRoles;
     btn.textContent = isMultiplayerMode()
       ? isClient
         ? '🎮 Spiel lokal öffnen'
@@ -1840,6 +1854,23 @@ function selectRole(roleId: string): void {
     return;
   }
 
+  if (localStartMode === 'singleplayer') {
+    const role = ROLES.find((entry) => entry.id === roleId);
+    if (!role) {
+      return;
+    }
+
+    state = {
+      ...state,
+      activeRoles: [role],
+      selectedRole: null,
+      currentRoleIndex: 0,
+    };
+    updateRoleSelectionUI();
+    startGame();
+    return;
+  }
+
   const result = assignRole(state, roleId);
   if (!result.ok) return;
   state = result.state;
@@ -1867,7 +1898,7 @@ function startGame(): void {
     return;
   }
 
-  if (state.activeRoles.length < 2) return;
+  if (state.activeRoles.length < getMinimumRequiredRolesForStart()) return;
   state = resetRoundVotingState({
     ...state,
     selectedRole: state.activeRoles[0] ?? null,

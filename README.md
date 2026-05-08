@@ -78,7 +78,7 @@ Systemische Folgewirkungen koppeln die Werte aneinander: Ein kollabierender Nutz
 
 Eine Person übernimmt alle Ratsmitglieder nacheinander. Gut für didaktische Einzelarbeit oder Testläufe.
 
-**Start:** Mindestens zwei Rollen wählen → `?mode=singleplayer` oder Standardauswahl im Startscreen.
+**Start:** Mindestens eine Rolle wählen → `?mode=singleplayer` oder Standardauswahl im Startscreen.
 
 ---
 

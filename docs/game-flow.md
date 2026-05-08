@@ -53,7 +53,9 @@ Notfall-Abzweigungen aus `screen-game`:
 2. `assignRole(state, roleId)` prüft: Rolle bekannt? Noch frei?
 3. Bei `ok: true`: Rolle wird zu `state.activeRoles` hinzugefügt
 4. `updateRoleSelectionUI()` zeigt vergebene Rollen gesperrt an
-5. Mindestens 2 Rollen → Button "Spiel starten" aktiv
+5. Mindestanzahl erreicht → Button "Spiel starten" aktiv
+      - Singleplayer: mindestens 1 Rolle
+      - Mehrspieler am selben Gerät und Relay-Multiplayer: mindestens 2 Rollen
 
 #### Multiplayer
 1. Spieler:in klickt Karte → `runMultiplayerRequest({ kind: 'role-claim', ... })`
