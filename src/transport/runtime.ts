@@ -29,10 +29,11 @@ export interface MultiplayerUrlConfig {
   mode: 'host' | 'join';
   gameId: string;
   relayUrl: string;
+  relayUrls: string[];
 }
 
 function getSessionPersistenceKey(config: MultiplayerUrlConfig): string {
-  return `genesis:transport-session:${config.mode}:${config.gameId}:${config.relayUrl}`;
+  return `genesis:transport-session:${config.mode}:${config.gameId}:${config.relayUrls.join(',')}`;
 }
 
 export interface RelayMultiplayerRuntimeOptions {
@@ -50,11 +51,29 @@ export interface RelayMultiplayerRuntimeOptions {
 
 type TransportListener = (event: TransportEvent) => void;
 
+function parseRelayUrlList(input: string): string[] {
+  const raw = input.trim();
+  if (!raw) {
+    return [];
+  }
+
+  const relayUrls = raw
+    .split(/[\s,;]+/)
+    .map((entry) => entry.trim().replace(/^[\[\]"']+|[\[\]"']+$/g, ''))
+    .filter(Boolean);
+
+  return Array.from(new Set(relayUrls));
+}
+
 export function readMultiplayerUrlConfig(search: string): MultiplayerUrlConfig | null {
   const params = new URLSearchParams(search);
   const mode = params.get('mp');
   const gameId = params.get('game')?.trim();
-  const relayUrl = params.get('relay')?.trim() || MULTIPLAYER_DEFAULTS.relayUrl;
+  const relayValues = params.getAll('relay');
+  const relayUrls = relayValues.length > 0
+    ? parseRelayUrlList(relayValues.join(','))
+    : [...MULTIPLAYER_DEFAULTS.relayUrls];
+  const relayUrl = relayUrls[0] ?? MULTIPLAYER_DEFAULTS.relayUrls[0];
 
   if ((mode !== 'host' && mode !== 'join') || !gameId) {
     return null;
@@ -64,6 +83,7 @@ export function readMultiplayerUrlConfig(search: string): MultiplayerUrlConfig |
     mode,
     gameId,
     relayUrl,
+    relayUrls: relayUrls.length > 0 ? relayUrls : [...MULTIPLAYER_DEFAULTS.relayUrls],
   };
 }
 
@@ -71,7 +91,7 @@ export function createRelayJoinUrl(baseUrl: string, config: MultiplayerUrlConfig
   const url = new URL(baseUrl);
   url.searchParams.set('mp', 'join');
   url.searchParams.set('game', config.gameId);
-  url.searchParams.set('relay', config.relayUrl);
+  url.searchParams.set('relay', config.relayUrls.join(','));
   return url.toString();
 }
 
@@ -120,10 +140,10 @@ export class RelayMultiplayerRuntime {
       getSessionPersistenceKey(options.config),
     );
     this.bus = new NostrRelayBus({
-      relayUrls: [options.config.relayUrl],
+      relayUrls: options.config.relayUrls,
       session: this.session,
-      onConnectionIssue: ({ reason }) => {
-        this.reportRelayIssue(formatRelayIssueMessage(this.config.relayUrl, reason));
+      onConnectionIssue: ({ relayUrls, reason }) => {
+        this.reportRelayIssue(formatRelayIssueMessage(relayUrls.join(', '), reason));
       },
     });
     this.eventFactory = new TransportEventFactory({
@@ -164,6 +184,10 @@ export class RelayMultiplayerRuntime {
 
   get relayUrl(): string {
     return this.config.relayUrl;
+  }
+
+  get relayUrls(): string[] {
+    return [...this.config.relayUrls];
   }
 
   get playerId(): string {

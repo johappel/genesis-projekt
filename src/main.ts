@@ -63,7 +63,7 @@ let multiplayerStatusMessage = MULTIPLAYER_CONFIG
   : '';
 const MULTIPLAYER_RECOVERY_TIMEOUT_MS = MULTIPLAYER_TUNING.recoveryTimeoutMs;
 const PAKT_DRAFT_STORAGE_KEY = MULTIPLAYER_CONFIG
-  ? `genesis:pakt-draft:${MULTIPLAYER_CONFIG.mode}:${MULTIPLAYER_CONFIG.gameId}:${MULTIPLAYER_CONFIG.relayUrl}`
+  ? `genesis:pakt-draft:${MULTIPLAYER_CONFIG.mode}:${MULTIPLAYER_CONFIG.gameId}:${MULTIPLAYER_CONFIG.relayUrls.join(',')}`
   : 'genesis:pakt-draft:local';
 
 type LocalStartMode = 'singleplayer' | 'same-device';
@@ -732,15 +732,27 @@ function updateMultiplayerStatusUI(): void {
   inviteLink.value = createRelayJoinUrl(window.location.href, MULTIPLAYER_CONFIG);
 }
 
-function getConfiguredRelayUrl(): string {
+function getConfiguredRelayUrls(): string[] {
   const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
-  return relayInput?.value.trim() || MULTIPLAYER_DEFAULTS.relayUrl;
+  const input = relayInput?.value.trim();
+  if (!input) {
+    return [...MULTIPLAYER_DEFAULTS.relayUrls];
+  }
+
+  const relayUrls = input
+    .split(/[\s,;]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return relayUrls.length > 0
+    ? Array.from(new Set(relayUrls))
+    : [...MULTIPLAYER_DEFAULTS.relayUrls];
 }
 
 function initializeNostrModal(): void {
   const relayInput = document.getElementById('multiplayer-relay-input') as HTMLInputElement | null;
   if (relayInput && !relayInput.value.trim()) {
-    relayInput.value = MULTIPLAYER_DEFAULTS.relayUrl;
+    relayInput.value = MULTIPLAYER_DEFAULTS.relayUrls.join(', ');
   }
 }
 
@@ -1509,17 +1521,17 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
 }
 
 function startRelayHost(): void {
-  const relayUrl = getConfiguredRelayUrl();
+  const relayUrls = getConfiguredRelayUrls();
   const url = new URL(window.location.href);
   url.searchParams.set('mp', 'host');
   url.searchParams.set('game', `${MULTIPLAYER_DEFAULTS.roomCodePrefix}-${crypto.randomUUID().slice(0, 6)}`);
-  url.searchParams.set('relay', relayUrl);
+  url.searchParams.set('relay', relayUrls.join(','));
   window.location.href = url.toString();
 }
 
 function joinRelayGame(): void {
   const gameInput = document.getElementById('multiplayer-game-input') as HTMLInputElement | null;
-  const relayUrl = getConfiguredRelayUrl();
+  const relayUrls = getConfiguredRelayUrls();
   const gameId = gameInput?.value.trim();
 
   if (!gameId) {
@@ -1530,7 +1542,7 @@ function joinRelayGame(): void {
   const url = new URL(window.location.href);
   url.searchParams.set('mp', 'join');
   url.searchParams.set('game', gameId);
-  url.searchParams.set('relay', relayUrl);
+  url.searchParams.set('relay', relayUrls.join(','));
   window.location.href = url.toString();
 }
 

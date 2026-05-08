@@ -1,5 +1,13 @@
 export const MULTIPLAYER_DEFAULTS = {
-  relayUrl: 'ws://relay.nostr.net/',
+  relayUrls: [
+        "wss://relay.damus.io",
+        "wss://eden.nostr.land",
+        "wss://nos.lol",
+        "wss://nostr-pub.wellorder.net",
+        "wss://nostr.wine",
+        "wss://nostr.bitcoiner.social",
+        "wss://relay.primal.net"
+    ] as string[],
   roomCodePrefix: 'genesis',
 } as const;
 

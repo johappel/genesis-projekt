@@ -1874,6 +1874,16 @@ describe('readMultiplayerUrlConfig', () => {
       mode: 'host',
       gameId: 'abc123',
       relayUrl: 'ws://localhost:7000/',
+      relayUrls: ['ws://localhost:7000/'],
+    });
+  });
+
+  it('liest mehrere relays aus einer kommaseparierten URL', () => {
+    expect(readMultiplayerUrlConfig('?mp=host&game=abc123&relay=wss://relay.damus.io,wss://nos.lol')).toEqual({
+      mode: 'host',
+      gameId: 'abc123',
+      relayUrl: 'wss://relay.damus.io',
+      relayUrls: ['wss://relay.damus.io', 'wss://nos.lol'],
     });
   });
 
@@ -1888,7 +1898,17 @@ describe('createRelayJoinUrl', () => {
       mode: 'host',
       gameId: 'abc123',
       relayUrl: 'ws://localhost:7000/',
+      relayUrls: ['ws://localhost:7000/'],
     })).toBe('http://localhost:5173/?mp=join&game=abc123&relay=ws%3A%2F%2Flocalhost%3A7000%2F');
+  });
+
+  it('kodiert mehrere relays im Join-Link', () => {
+    expect(createRelayJoinUrl('http://localhost:5173/?mp=host&game=abc123', {
+      mode: 'host',
+      gameId: 'abc123',
+      relayUrl: 'wss://relay.damus.io',
+      relayUrls: ['wss://relay.damus.io', 'wss://nos.lol'],
+    })).toBe('http://localhost:5173/?mp=join&game=abc123&relay=wss%3A%2F%2Frelay.damus.io%2Cwss%3A%2F%2Fnos.lol');
   });
 });
 
