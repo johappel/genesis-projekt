@@ -136,9 +136,9 @@ src/config.ts
 Alle spielrelevanten Einstellungen an einem Ort:
 
 ```typescript
-// Standard-Relay-Adresse
+// Standard-Relay-Adressen (kommasepariert im Eingabefeld, Array in der Konfig)
 export const MULTIPLAYER_DEFAULTS = {
-  relayUrl: 'ws://localhost:7000/',
+  relayUrls: ['wss://relay.primal.net'],
   roomCodePrefix: 'genesis',
 };
 
