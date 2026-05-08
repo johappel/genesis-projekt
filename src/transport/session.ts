@@ -17,7 +17,9 @@ export function createEphemeralTransportSession(
   isHost: boolean,
   persistenceKey?: string,
 ): EphemeralTransportSession {
-  const persistedSession = persistenceKey ? readPersistedSession(persistenceKey) : null;
+  const persistedSession = persistenceKey && shouldReusePersistedSession()
+    ? readPersistedSession(persistenceKey)
+    : null;
   const secretKey = persistedSession ? hexToBytes(persistedSession.secretKeyHex) : generateSecretKey();
   const pubkey = getPublicKey(secretKey);
   const playerId = persistedSession?.playerId ?? globalThis.crypto.randomUUID();
@@ -40,11 +42,30 @@ export function createEphemeralTransportSession(
   };
 }
 
+function shouldReusePersistedSession(): boolean {
+  const navigationType = readNavigationType();
+  return navigationType === 'reload' || navigationType === 'back_forward';
+}
+
 function getSessionStorage(): Storage | null {
   try {
     return typeof globalThis.sessionStorage === 'undefined' ? null : globalThis.sessionStorage;
   } catch {
     return null;
+  }
+}
+
+function readNavigationType(): string {
+  try {
+    const performanceApi = globalThis.performance;
+    if (!performanceApi || typeof performanceApi.getEntriesByType !== 'function') {
+      return '';
+    }
+
+    const entries = performanceApi.getEntriesByType('navigation') as Array<{ type?: string }>;
+    return entries[0]?.type ?? '';
+  } catch {
+    return '';
   }
 }
 

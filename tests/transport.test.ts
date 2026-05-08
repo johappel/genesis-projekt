@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createGame } from '../src/game/engine/createGame.js';
 import { PAKT_ARTICLE_IDS } from '../src/game/engine/pakt.js';
@@ -27,6 +27,65 @@ function createPaktAnswers(prefix: string): Record<PaktArticleId, string> {
   return Object.fromEntries(
     PAKT_ARTICLE_IDS.map((articleId, index) => [articleId, `${prefix} Artikel ${index + 1}`])
   ) as Record<PaktArticleId, string>;
+}
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+
+  get length(): number {
+    return this.values.size;
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.values.keys())[index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+}
+
+function mockSessionEnvironment(navigationType: 'navigate' | 'reload' | 'back_forward'): {
+  restore: () => void;
+} {
+  const sessionStorage = new MemoryStorage();
+  const originalSessionStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  const originalPerformance = globalThis.performance;
+
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    value: sessionStorage,
+  });
+
+  vi.stubGlobal('performance', {
+    ...originalPerformance,
+    getEntriesByType: (entryType: string) => entryType === 'navigation' ? [{ type: navigationType }] : [],
+  });
+
+  return {
+    restore: () => {
+      if (originalSessionStorage) {
+        Object.defineProperty(globalThis, 'sessionStorage', originalSessionStorage);
+      } else {
+        delete (globalThis as { sessionStorage?: Storage }).sessionStorage;
+      }
+
+      vi.stubGlobal('performance', originalPerformance);
+      vi.unstubAllGlobals();
+    },
+  };
 }
 
 const BASE_EVENT: TransportEvent = {
@@ -229,6 +288,212 @@ describe('LocalBus', () => {
           },
           selectedRole: {
             id: 'juristin',
+          },
+          currentRoleIndex: 1,
+        },
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('ignoriert bei state-sync lokale nicht-autoritative Rundenvotes', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerASession = createEphemeralTransportSession(false);
+    const joinerBSession = createEphemeralTransportSession(false);
+    const theologin = ROLES.find((role) => role.id === 'theologin');
+    const entwicklerin = ROLES.find((role) => role.id === 'entwicklerin');
+    const juristin = ROLES.find((role) => role.id === 'juristin');
+    if (!theologin || !entwicklerin || !juristin) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const joinerAFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerASession.clientInfo,
+    });
+    const joinerBFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerBSession.clientInfo,
+    });
+    const voterFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: hostSession.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [theologin, entwicklerin, juristin],
+        selectedRole: theologin,
+        currentRoleIndex: 0,
+        roundVotes: {
+          theologin: 'sophia-1-b',
+          entwicklerin: 'sophia-1-b',
+          juristin: 'sophia-1-b',
+        },
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(voterFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'theologin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(joinerAFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'entwicklerin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(joinerBFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'juristin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(voterFactory.createVoteCastRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      roleId: 'theologin',
+      optionId: 'sophia-1-b',
+      isTieBreak: false,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    const syncEvent = received.findLast(
+      (event) => event.eventName === 'state-sync-sent' && event.snapshot.state.roundVotes.theologin === 'sophia-1-b'
+    );
+
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        state: {
+          roundVotes: {
+            theologin: 'sophia-1-b',
+          },
+          selectedRole: {
+            id: 'entwicklerin',
+          },
+          currentRoleIndex: 1,
+        },
+      },
+    });
+
+    hostAuthority.stop();
+    unsubscribe();
+    bus.destroy();
+  });
+
+  it('leitet bei state-sync den naechsten Zug vom zuletzt akzeptierten Vote ab', async () => {
+    const bus = new LocalBus();
+    const hostSession = createEphemeralTransportSession(true);
+    const joinerASession = createEphemeralTransportSession(false);
+    const joinerBSession = createEphemeralTransportSession(false);
+    const theologin = ROLES.find((role) => role.id === 'theologin');
+    const entwicklerin = ROLES.find((role) => role.id === 'entwicklerin');
+    const juristin = ROLES.find((role) => role.id === 'juristin');
+    if (!theologin || !entwicklerin || !juristin) {
+      throw new Error('Testrollen nicht gefunden');
+    }
+
+    const hostFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: hostSession.clientInfo,
+    });
+    const joinerAFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerASession.clientInfo,
+    });
+    const joinerBFactory = new TransportEventFactory({
+      gameId: 'game-1',
+      clientInfo: joinerBSession.clientInfo,
+    });
+    const hostSnapshot: StateSnapshot = {
+      state: {
+        ...createGame(),
+        activeRoles: [theologin, entwicklerin, juristin],
+        selectedRole: theologin,
+        currentRoleIndex: 1,
+      },
+      lastAppliedSeqByPlayer: {},
+      roleOwners: {},
+    };
+    const received: TransportEvent[] = [];
+
+    const unsubscribe = bus.subscribe('game-1', (event) => {
+      received.push(event);
+    });
+
+    const hostAuthority = new HostAuthority({
+      bus,
+      gameId: 'game-1',
+      session: hostSession,
+      rulesVersion: 'v1',
+      maxPlayers: 6,
+      validRoleIds: ROLES.map((role) => role.id),
+      validLensIds: LENSES.map((lens) => lens.id),
+      getCurrentRoundId: () => 'round-0',
+      getAuthoritativeSnapshot: () => hostSnapshot,
+    });
+
+    hostAuthority.start();
+
+    await bus.publish(hostFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'theologin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(joinerAFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'entwicklerin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await bus.publish(joinerBFactory.createRoleClaimRequested({ roundId: 'round-0', roleId: 'juristin' }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await bus.publish(hostFactory.createVoteCastRequested({
+      roundId: 'round-0',
+      caseId: 1,
+      phaseKey: 'round-0:base',
+      roleId: 'theologin',
+      optionId: 'sophia-1-b',
+      isTieBreak: false,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+
+    const syncEvent = received.findLast(
+      (event) => event.eventName === 'state-sync-sent' && event.snapshot.state.roundVotes.theologin === 'sophia-1-b'
+    );
+
+    expect(syncEvent).toMatchObject({
+      eventName: 'state-sync-sent',
+      snapshot: {
+        state: {
+          roundVotes: {
+            theologin: 'sophia-1-b',
+          },
+          selectedRole: {
+            id: 'entwicklerin',
           },
           currentRoleIndex: 1,
         },
@@ -738,6 +1003,7 @@ describe('LocalBus', () => {
     unsubscribe();
     bus.destroy();
   });
+
 
   it('bestaetigt Stimmen des Rollenbesitzers und lehnt doppelte oder fremde Stimmen ab', async () => {
     const bus = new LocalBus();
@@ -1561,6 +1827,34 @@ describe('createEphemeralTransportSession', () => {
     expect(session.clientInfo.pubkey).toBeTruthy();
     expect(session.clientInfo.isHost).toBe(true);
     expect(session.secretKey).toBeInstanceOf(Uint8Array);
+  });
+
+  it('verwendet eine persistierte Relay-Identitaet beim Reload derselben Tab-Sitzung erneut', () => {
+    const environment = mockSessionEnvironment('reload');
+
+    try {
+      const firstSession = createEphemeralTransportSession(false, 'genesis:test-session');
+      const secondSession = createEphemeralTransportSession(false, 'genesis:test-session');
+
+      expect(secondSession.clientInfo.playerId).toBe(firstSession.clientInfo.playerId);
+      expect(Array.from(secondSession.secretKey)).toEqual(Array.from(firstSession.secretKey));
+    } finally {
+      environment.restore();
+    }
+  });
+
+  it('rotiert die Relay-Identitaet bei frischer Navigation trotz kopiertem Session-Storage', () => {
+    const environment = mockSessionEnvironment('navigate');
+
+    try {
+      const firstSession = createEphemeralTransportSession(false, 'genesis:test-session');
+      const secondSession = createEphemeralTransportSession(false, 'genesis:test-session');
+
+      expect(secondSession.clientInfo.playerId).not.toBe(firstSession.clientInfo.playerId);
+      expect(Array.from(secondSession.secretKey)).not.toEqual(Array.from(firstSession.secretKey));
+    } finally {
+      environment.restore();
+    }
   });
 });
 

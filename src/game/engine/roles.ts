@@ -5,6 +5,15 @@ export type RoleResult =
   | { ok: true; state: GameState }
   | { ok: false; error: 'ROLE_NOT_FOUND' | 'ROLE_ALREADY_TAKEN' };
 
+export function sortRolesByCanonicalOrder<T extends { id: string }>(roles: T[]): T[] {
+  const roleOrder = new Map(ROLES.map((role, index) => [role.id, index]));
+  return [...roles].sort((left, right) => {
+    const leftIndex = roleOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = roleOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+    return leftIndex - rightIndex;
+  });
+}
+
 /**
  * Weist dem Spielzustand eine Rolle zu.
  * – Unbekannte IDs werden abgelehnt.
@@ -19,7 +28,7 @@ export function assignRole(state: GameState, roleId: string): RoleResult {
     return { ok: false, error: 'ROLE_ALREADY_TAKEN' };
   }
 
-  const nextActiveRoles = [...state.activeRoles, role];
+  const nextActiveRoles = sortRolesByCanonicalOrder([...state.activeRoles, role]);
   return {
     ok: true,
     state: {

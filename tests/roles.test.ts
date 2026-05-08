@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createGame } from '../src/game/engine/createGame.js';
-import { assignRole } from '../src/game/engine/roles.js';
+import { assignRole, sortRolesByCanonicalOrder } from '../src/game/engine/roles.js';
+import { ROLES } from '../src/game/data/roles.js';
 
 describe('assignRole()', () => {
   it('vergibt eine bekannte Rolle', () => {
@@ -56,5 +57,19 @@ describe('assignRole()', () => {
     const state = createGame();
     assignRole(state, 'buergerin');
     expect(state.selectedRole).toBeNull();
+  });
+
+  it('ordnet Rollen in kanonischer Reihenfolge statt nach Claim-Reihenfolge', () => {
+    const shuffledRoles = [
+      ROLES.find((role) => role.id === 'juristin'),
+      ROLES.find((role) => role.id === 'theologin'),
+      ROLES.find((role) => role.id === 'entwicklerin'),
+    ].filter((role): role is (typeof ROLES)[number] => Boolean(role));
+
+    expect(sortRolesByCanonicalOrder(shuffledRoles).map((role) => role.id)).toEqual([
+      'theologin',
+      'entwicklerin',
+      'juristin',
+    ]);
   });
 });

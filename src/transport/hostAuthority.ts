@@ -246,10 +246,7 @@ export class HostAuthority {
       phaseTimerBonusSeconds: acceptedLensSelection
         ? acceptedLensSelection.timerBonusSeconds
         : snapshot.state.phaseTimerBonusSeconds,
-      roundVotes: {
-        ...snapshot.state.roundVotes,
-        ...authoritativeRoundVotes,
-      },
+      roundVotes: authoritativeRoundVotes,
     };
 
     const resolvedPakt = deriveResolvedPakt(mergedState);
@@ -260,7 +257,24 @@ export class HostAuthority {
     };
 
     if (Object.keys(authoritativeRoundVotes).length > 0 && !haveAllActiveRolesVoted(mergedState)) {
-      const { role, index } = getNextPendingRole(mergedState);
+      const acceptedVotes = Object.values(this.acceptedVotesByPhase[phaseKey] ?? {}) as VoteCastEvent[];
+      const latestAcceptedVote = acceptedVotes.reduce<VoteCastEvent | null>((latestVote, voteEvent) => {
+        if (!latestVote || voteEvent.seq > latestVote.seq) {
+          return voteEvent;
+        }
+        return latestVote;
+      }, null);
+      const latestAcceptedRoleIndex = latestAcceptedVote
+        ? mergedState.activeRoles.findIndex((role) => role.id === latestAcceptedVote.roleId)
+        : -1;
+      const nextRoleSourceState = latestAcceptedVote && latestAcceptedRoleIndex >= 0
+        ? {
+            ...mergedState,
+            selectedRole: mergedState.activeRoles[latestAcceptedRoleIndex] ?? mergedState.selectedRole,
+            currentRoleIndex: latestAcceptedRoleIndex,
+          }
+        : mergedState;
+      const { role, index } = getNextPendingRole(nextRoleSourceState);
       mergedState = {
         ...mergedState,
         selectedRole: role,

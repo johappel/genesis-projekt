@@ -8,7 +8,7 @@ import { VALUE_LABELS, MACHT_WARN_THRESHOLD, MACHT_CRITICAL_THRESHOLD } from './
 import { readGameplayTimingConfig } from './game/config.js';
 import { UI_TEXT } from './game/data/uiText.js';
 import { createGame } from './game/engine/createGame.js';
-import { assignRole } from './game/engine/roles.js';
+import { assignRole, sortRolesByCanonicalOrder } from './game/engine/roles.js';
 import {
   advanceToNextRole,
   beginTieBreak,
@@ -230,6 +230,15 @@ function getLocalOwnedRole(): typeof ROLES[number] | null {
 function getLocalPendingRole(): typeof ROLES[number] | null {
   const localRole = getLocalOwnedRole();
   if (!localRole || state.roundVotes[localRole.id]) {
+    return null;
+  }
+
+  return localRole;
+}
+
+function getLocalQueueableRole(): typeof ROLES[number] | null {
+  const localRole = getLocalPendingRole();
+  if (!localRole || state.selectedRole?.id === localRole.id) {
     return null;
   }
 
@@ -626,6 +635,10 @@ function isAwaitingVoteConfirmation(): boolean {
   return pendingMultiplayerRequest?.kind === 'vote';
 }
 
+function isAwaitingRoundCloseConfirmation(): boolean {
+  return pendingMultiplayerRequest?.kind === 'round-close';
+}
+
 function startPendingMultiplayerRequest(kind: PendingMultiplayerRequestKind, waitMessage: string): void {
   clearPendingMultiplayerRequest();
   pendingMultiplayerRequest = {
@@ -790,20 +803,20 @@ function publishOpenedPhase(statusMessage: string): void {
 }
 
 function canVoteInCurrentClient(): boolean {
-  return (!isMultiplayerMode() || isCurrentRoleOwnedLocally()) && !isAwaitingVoteConfirmation();
+  if (!isMultiplayerMode()) {
+    return !isAwaitingVoteConfirmation();
+  }
+
+  return Boolean(
+    state.selectedRole
+    && isLocalOwnedRole(state.selectedRole.id)
+    && !state.roundVotes[state.selectedRole.id]
+    && !isAwaitingVoteConfirmation()
+  );
 }
 
 function canInteractWithDecisionCards(): boolean {
-  if (!isMultiplayerMode()) {
-    return canVoteInCurrentClient();
-  }
-
-  const localPendingRole = getLocalPendingRole();
-  if (!localPendingRole) {
-    return false;
-  }
-
-  return !(state.selectedRole?.id === localPendingRole.id && isAwaitingVoteConfirmation());
+  return canVoteInCurrentClient();
 }
 
 function getRoleRejectionReasonLabel(reason: string): string {
@@ -952,8 +965,8 @@ function getLensSelectionRejectionReasonLabel(reason?: string): string {
 }
 
 function queueMultiplayerVote(option: DecisionOption): void {
-  const localPendingRole = getLocalPendingRole();
-  if (!localPendingRole) {
+  const queueableRole = getLocalQueueableRole();
+  if (!queueableRole) {
     setMultiplayerStatus('Deine Rolle hat in dieser Runde bereits abgestimmt oder ist noch nicht sauber synchronisiert.');
     return;
   }
@@ -961,12 +974,12 @@ function queueMultiplayerVote(option: DecisionOption): void {
   const existingQueuedVote = getQueuedMultiplayerVote();
   if (
     existingQueuedVote
-    && existingQueuedVote.roleId === localPendingRole.id
+    && existingQueuedVote.roleId === queueableRole.id
     && existingQueuedVote.optionId === option.id
   ) {
     queuedMultiplayerVote = null;
     multiplayerQueueNotice = '';
-    setMultiplayerStatus(`Vormerkung fuer ${localPendingRole.name} wurde entfernt.`);
+    setMultiplayerStatus(`Vormerkung fuer ${queueableRole.name} wurde entfernt.`);
     renderCase();
     return;
   }
@@ -974,13 +987,13 @@ function queueMultiplayerVote(option: DecisionOption): void {
   queuedMultiplayerVote = {
     phaseKey: getCurrentVotePhaseKey(),
     caseId: state.currentCase + 1,
-    roleId: localPendingRole.id,
+    roleId: queueableRole.id,
     optionId: option.id,
     optionText: option.text,
     isTieBreak: Boolean(state.tieBreakOptions),
   };
   multiplayerQueueNotice = '';
-  setMultiplayerStatus(`„${option.text}“ ist fuer ${localPendingRole.name} vorgemerkt und wird bei ihrem Zug automatisch gesendet.`);
+  setMultiplayerStatus(`„${option.text}“ ist fuer ${queueableRole.name} vorgemerkt und wird bei ihrem Zug automatisch gesendet.`);
   renderCase();
 }
 
@@ -1016,7 +1029,7 @@ function addActiveRoleById(roleId: string): void {
 
   state = {
     ...state,
-    activeRoles: [...state.activeRoles, role],
+    activeRoles: sortRolesByCanonicalOrder([...state.activeRoles, role]),
   };
 }
 
@@ -1054,8 +1067,49 @@ function getResolvedVoteCount(optionId: string): number {
   return Object.values(state.roundVotes).filter((currentOptionId) => currentOptionId === optionId).length;
 }
 
+function continueHostMultiplayerRoundIfReady(caseData: typeof CASES[0], caseId: number): boolean {
+  const runtime = multiplayer;
+  if (!runtime?.isHost || pendingDecision || isAwaitingRoundCloseConfirmation()) {
+    return false;
+  }
+
+  if (!haveAllActiveRolesVoted(state)) {
+    return false;
+  }
+
+  const optionIds = getAvailableDecisions(caseData).map((decision) => decision.id);
+  const roundDecision = determineRoundDecision(state, optionIds);
+  if (!roundDecision) {
+    return false;
+  }
+
+  if (roundDecision.status === 'tie-break') {
+    state = beginTieBreak(state, roundDecision.optionIds);
+    showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
+    return true;
+  }
+
+  runMultiplayerRequest({
+    kind: 'round-close',
+    waitMessage: 'Rundenabschluss hängt fest.',
+    request: () => runtime.closeRound({
+      caseId,
+      phaseKey: getCurrentVotePhaseKey(),
+      resolvedOptionId: roundDecision.optionId,
+      voteSummary: buildRoundVoteSummary(),
+    }),
+    errorMessage: 'Rundenabschluss konnte nicht übertragen werden.',
+  });
+  setMultiplayerStatus('Host bestätigt den Rundenabschluss über das Relay.');
+  return true;
+}
+
 function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cast' }>): void {
   if (state.roundVotes[event.roleId]) {
+    if (isMultiplayerMode()) {
+      renderCase();
+      continueHostMultiplayerRoundIfReady(CASES[state.currentCase]!, event.caseId);
+    }
     return;
   }
 
@@ -1085,19 +1139,33 @@ function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cas
   clearTimer();
 
   if (!haveAllActiveRolesVoted(state)) {
-    state = advanceToNextRole(state);
-
     if (isMultiplayerMode()) {
+      const acceptedRoleIndex = state.activeRoles.findIndex((role) => role.id === votingRole.id);
+      state = advanceToNextRole({
+        ...state,
+        currentRoleIndex: acceptedRoleIndex >= 0 ? acceptedRoleIndex : state.currentRoleIndex,
+        selectedRole: votingRole,
+      });
       setMultiplayerStatus(
-        isCurrentRoleOwnedLocally()
-          ? `Du bist jetzt mit ${state.selectedRole?.name ?? 'deiner Rolle'} am Zug. Vorgemerkte Wahlen werden sofort uebernommen.`
-          : `Warte auf ${state.selectedRole?.name ?? 'die naechste Rolle'} im Relay-Raum.`
+        event.playerId === multiplayer?.playerId
+          ? 'Deine Stimme ist erfasst. Der nächste host-autoritativ bestätigte Zug ist freigegeben.'
+          : `${votedRoleName} hat abgestimmt. Der nächste host-autoritativ bestätigte Zug ist freigegeben.`
       );
       renderCase();
       return;
     }
 
+    state = advanceToNextRole(state);
+
     showHandoverNotice(votedRoleName, state.selectedRole?.name ?? 'naechste Rolle');
+    return;
+  }
+
+  if (isMultiplayerMode()) {
+    renderCase();
+    if (!continueHostMultiplayerRoundIfReady(caseData, event.caseId)) {
+      setMultiplayerStatus('Warte auf den host-autoritativen Rundenabschluss.');
+    }
     return;
   }
 
@@ -1107,43 +1175,15 @@ function applyAcceptedVote(event: Extract<TransportEvent, { eventName: 'vote-cas
   }
 
   if (roundDecision.status === 'tie-break') {
-    if (isMultiplayerMode()) {
-      if (multiplayer?.isHost) {
-        state = beginTieBreak(state, roundDecision.optionIds);
-        showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
-      } else {
-        setMultiplayerStatus('Gleichstand erkannt. Warte auf die host-autoritative Stichwahlphase.');
-      }
-      return;
-    }
-
     state = beginTieBreak(state, roundDecision.optionIds);
     showTieBreakNotice(caseData, roundDecision.optionIds, roundDecision.voteCount);
     return;
   }
 
-  if (multiplayer?.isHost) {
-    const runtime = multiplayer;
-    if (!runtime) {
-      return;
-    }
+  pendingDecision = caseData.decisions.find((decision) => decision.id === roundDecision.optionId) ?? null;
+  if (!pendingDecision) return;
 
-    runMultiplayerRequest({
-      kind: 'round-close',
-      waitMessage: 'Rundenabschluss hängt fest.',
-      request: () => runtime.closeRound({
-        caseId: event.caseId,
-        phaseKey: getCurrentVotePhaseKey(),
-        resolvedOptionId: roundDecision.optionId,
-        voteSummary: buildRoundVoteSummary(),
-      }),
-      errorMessage: 'Rundenabschluss konnte nicht übertragen werden.',
-    });
-    setMultiplayerStatus('Host bestätigt den Rundenabschluss über das Relay.');
-    return;
-  }
-
-  setMultiplayerStatus('Warte auf den host-autoritativen Rundenabschluss.');
+  showConsequence(pendingDecision, roundDecision.voteCount);
 }
 
 function applyAcceptedRoundClose(event: Extract<TransportEvent, { eventName: 'round-closed' }>): void {
@@ -1271,6 +1311,12 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
         restoreAcceptedRoundCloseFromSync(event.snapshot.pendingRoundClose);
       } else if (state.selectedRole) {
         renderCase();
+        if (multiplayer?.isHost) {
+          const currentCaseData = CASES[state.currentCase];
+          if (currentCaseData) {
+            continueHostMultiplayerRoundIfReady(currentCaseData, state.currentCase + 1);
+          }
+        }
       } else if (isMultiplayerMode()) {
         renderWaitingForMultiplayerStart();
       }
@@ -1521,6 +1567,15 @@ function getDisplayedRoundVoteCount(): number {
 function getRoundStatusLabel(): string {
   if (isRoundSummaryActive()) {
     return `Runde abgeschlossen · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen`;
+  }
+
+  if (
+    isMultiplayerMode()
+    && state.selectedRole
+    && state.roundVotes[state.selectedRole.id]
+    && !haveAllActiveRolesVoted(state)
+  ) {
+    return `Synchronisiere nächsten Zug · ${getDisplayedRoundVoteCount()}/${state.activeRoles.length} Stimmen${state.tieBreakOptions ? ' · Stichwahl' : ''}${DEVELOPER_MODE ? ' · DEV' : ''}`;
   }
 
   const currentRoleName = state.selectedRole?.name
@@ -1846,7 +1901,7 @@ function renderCase(): void {
     return;
   }
   renderScenarioPanel(caseData);
-  if ((isMultiplayerMode() && !isRoundSummaryActive()) || canVoteInCurrentClient()) {
+  if (!haveAllActiveRolesVoted(state) && ((isMultiplayerMode() && !isRoundSummaryActive()) || canVoteInCurrentClient())) {
     startDecisionTimer(caseData);
   } else {
     clearTimer();
@@ -1914,13 +1969,23 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
   const canVoteHere = canVoteInCurrentClient();
   const canInteractHere = canInteractWithDecisionCards();
   const localPendingRole = getLocalPendingRole();
+  const localQueueableRole = getLocalQueueableRole();
+  const canDraftHere = Boolean(isMultiplayerMode() && !canVoteHere && localQueueableRole);
   const lensInitiativeRole = getCurrentLensInitiativeRole();
   const canChooseLensHere = canCurrentClientChooseLens();
   const queuedVote = getQueuedMultiplayerVote();
-  const isFutureQueuedVote = Boolean(queuedVote && state.selectedRole?.id !== queuedVote.roleId);
+  const isFutureQueuedVote = Boolean(queuedVote && localQueueableRole && queuedVote.roleId === localQueueableRole.id);
+  const awaitingNextTurnSync = Boolean(
+    isMultiplayerMode()
+    && state.selectedRole
+    && state.roundVotes[state.selectedRole.id]
+    && !haveAllActiveRolesVoted(state)
+  );
   const roundStatusText = isRoundSummaryActive()
     ? `Die Runde wurde host-autoritativ abgeschlossen. Erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`
-    : `<strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`;
+    : awaitingNextTurnSync
+      ? `Die Stimme von <strong>${state.selectedRole?.name ?? '–'}</strong> ist erfasst. Warte auf die host-autoritative Freigabe der nächsten Rolle. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`
+      : `<strong>${state.selectedRole?.name ?? '–'}</strong> stimmt jetzt ab. Bereits erfasst: ${voteCount} von ${state.activeRoles.length} Stimmen.`;
   const decisionGuidance = !isMultiplayerMode()
     ? (canVoteHere
       ? (DEVELOPER_MODE ? 'Developer-Mode aktiv: Rohwerte sichtbar.' : 'Folgen als Tendenzen: Die Runde bleibt verdeckt, bis alle aktiven Rollen abgestimmt haben.')
@@ -1929,21 +1994,44 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
         : 'Warte auf die Rolle, die in diesem Relay-Raum gerade stimmberechtigt ist.')
     : !localPendingRole
       ? 'Deine lokale Rolle hat fuer diese Runde bereits abgestimmt oder ist noch nicht geclaimt.'
-      : state.selectedRole?.id === localPendingRole.id
+      : canVoteHere
         ? isAwaitingVoteConfirmation()
           ? 'Deine Stimme wurde gesendet. Warte auf die host-autoritative Bestätigung.'
           : queuedVote
             ? `Du bist am Zug. Die vorgemerkte Wahl „${queuedVote.optionText}“ wird jetzt automatisch uebertragen.`
             : 'Du bist am Zug. Stimme jetzt ab.'
         : queuedVote
-          ? `„${queuedVote.optionText}“ ist fuer ${localPendingRole.name} vorgemerkt. Du kannst die Wahl bis zu ihrem Zug noch aendern.`
-          : `${localPendingRole.name} ist noch nicht am Zug. Du kannst deine Entscheidung jetzt vormerken; sie wird spaeter automatisch uebertragen.`;
-  const queuedNoteMarkup = isFutureQueuedVote && queuedVote && localPendingRole
-    ? `<div class="decision-queue-note">Vorgemerkt fuer ${localPendingRole.name}: ${queuedVote.optionText}</div>`
+          ? `„${queuedVote.optionText}“ ist nur lokal fuer ${localQueueableRole?.name ?? localPendingRole.name} vorgemerkt. Die echte Stimmabgabe bleibt bis zur Host-Freigabe gesperrt.`
+          : `${localQueueableRole?.name ?? localPendingRole.name} ist noch nicht am Zug. Die eigentliche Stimmabgabe bleibt gesperrt, bis der Host diese Rolle freigibt.`;
+  const queuedNoteMarkup = isFutureQueuedVote && queuedVote && (localQueueableRole ?? localPendingRole)
+    ? `<div class="decision-queue-note">Nur lokal vorgemerkt fuer ${(localQueueableRole ?? localPendingRole)?.name ?? 'deine Rolle'}: ${queuedVote.optionText}</div>`
     : '';
   const queueNoticeMarkup = multiplayerQueueNotice
     ? `<div class="decision-queue-reset-note">${multiplayerQueueNotice}</div>`
     : '';
+  const draftChoicesMarkup = canDraftHere
+    ? `<div class="linsen-section">
+        <div class="panel-title">📝 Lokale Vormerkung</div>
+        <div class="decision-guidance">${queuedVote
+          ? `Die aktuelle Vormerkung fuer ${localQueueableRole?.name ?? localPendingRole?.name ?? 'deine Rolle'} bleibt lokal gespeichert, bis diese Rolle wirklich am Zug ist.`
+          : `${localQueueableRole?.name ?? localPendingRole?.name ?? 'Deine Rolle'} ist noch nicht am Zug. Du kannst hier rein lokal vorwaehlen, ohne den echten Zug freizugeben.`}</div>
+        ${queueNoticeMarkup}
+        ${queuedNoteMarkup}
+        ${availableDecisions
+          .map((decision) => {
+            const tags = formatEffectTags(getAppliedRoundEffect(decision.effects) as Record<string, number>, 'decision');
+            const isQueued = isFutureQueuedVote && queuedVote?.optionId === decision.id;
+            return `
+            <div class="decision-card${isQueued ? ' queued' : ''}" tabindex="0"
+                 onclick="handleLocalDraftDecision('${decision.id}')" onkeydown="if(event.key==='Enter'||event.key===' ')handleLocalDraftDecision('${decision.id}')">
+              <div class="decision-text">${decision.icon} ${decision.text}</div>
+              ${isQueued ? '<div class="decision-queued-badge">Lokal vorgemerkt</div>' : ''}
+              <div class="decision-effects">${tags}</div>
+            </div>`;
+          })
+          .join('')}
+      </div>`
+    : `${queueNoticeMarkup}${queuedNoteMarkup}`;
   const lensGuidance = state.selectedLens
     ? `Gemeinsame Deutungslinse aktiv: <strong>${state.selectedLens.name}</strong>. +${state.phaseTimerBonusSeconds}s Beratungszeit sind bereits eingerechnet.`
     : lensInitiativeRole
@@ -1992,8 +2080,6 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
     <div>
       <div class="panel-title">⚡ Entscheidung treffen</div>
       <div class="decision-guidance">${decisionGuidance}</div>
-      ${queueNoticeMarkup}
-      ${queuedNoteMarkup}
       <div id="decision-timer-box" class="decision-timer">
         <div class="timer-label">
           <span>Beratungszeit</span>
@@ -2006,17 +2092,17 @@ function renderScenarioPanel(caseData: typeof CASES[0]): void {
       ${availableDecisions
         .map((d) => {
           const tags = formatEffectTags(getAppliedRoundEffect(d.effects) as Record<string, number>, 'decision');
-          const isQueued = isFutureQueuedVote && queuedVote?.optionId === d.id;
           return `
-          <div class="decision-card${isQueued ? ' queued' : ''}" tabindex="0" style="${canInteractHere ? '' : 'opacity:0.5;pointer-events:none;'}"
+          <div class="decision-card" tabindex="0" style="${canInteractHere ? '' : 'opacity:0.5;pointer-events:none;'}"
                ${canInteractHere ? `onclick="handleDecision('${d.id}')" onkeydown="if(event.key==='Enter'||event.key===' ')handleDecision('${d.id}')"` : ''}>
             <div class="decision-text">${d.icon} ${d.text}</div>
-            ${isQueued ? '<div class="decision-queued-badge">Vorgemerkt</div>' : ''}
             <div class="decision-effects">${tags}</div>
           </div>`;
         })
         .join('')}
     </div>
+
+    ${draftChoicesMarkup}
   `;
 
   // Linsen rendern
@@ -2137,16 +2223,13 @@ function handleDecision(optionId: string): void {
   if (!option) return;
 
   if (isMultiplayerMode()) {
-    const localPendingRole = getLocalPendingRole();
-    if (!localPendingRole) {
-      setMultiplayerStatus('Deine lokale Rolle kann in dieser Phase gerade keine Stimme mehr abgeben.');
+    if (canVoteInCurrentClient() && state.selectedRole) {
+      submitMultiplayerVote(option, 'manual');
       return;
     }
 
-    if (state.selectedRole?.id !== localPendingRole.id) {
-      queueMultiplayerVote(option);
-      return;
-    }
+    setMultiplayerStatus('Nur die host-autorativ freigegebene Rolle darf jetzt abstimmen. Nutze die lokale Vormerkung getrennt vom aktiven Zug.');
+    return;
   }
 
   // Prophetisches Veto prüfen
@@ -2158,11 +2241,6 @@ function handleDecision(optionId: string): void {
   }
 
   const optionIds = availableDecisions.map((decision) => decision.id);
-
-  if (isMultiplayerMode() && state.selectedRole) {
-    submitMultiplayerVote(option, 'manual');
-    return;
-  }
 
   const voteResult = castVote(state, state.currentCase + 1, option.id, optionIds);
   if (!voteResult.ok) return;
@@ -2190,6 +2268,29 @@ function handleDecision(optionId: string): void {
   if (!pendingDecision) return;
 
   showConsequence(pendingDecision, roundDecision.voteCount);
+}
+
+function handleLocalDraftDecision(optionId: string): void {
+  if (!isMultiplayerMode()) {
+    return;
+  }
+
+  const caseData = CASES[state.currentCase];
+  if (!caseData) {
+    return;
+  }
+
+  const option = getAvailableDecisions(caseData).find((decision) => decision.id === optionId);
+  if (!option) {
+    return;
+  }
+
+  if (!getLocalQueueableRole()) {
+    setMultiplayerStatus('Deine lokale Rolle ist gerade nicht für eine Vormerkung verfügbar.');
+    return;
+  }
+
+  queueMultiplayerVote(option);
 }
 
 function showVetoNotice(): void {
@@ -3227,6 +3328,7 @@ declare global {
     closeNostrModal: typeof closeNostrModal;
     startGame: typeof startGame;
     handleDecision: typeof handleDecision;
+    handleLocalDraftDecision: typeof handleLocalDraftDecision;
     closeConsequence: typeof closeConsequence;
     openValueInfo: typeof openValueInfo;
     openValuesOverview: typeof openValuesOverview;
@@ -3249,6 +3351,7 @@ window.openNostrModal = openNostrModal;
 window.closeNostrModal = closeNostrModal;
 window.startGame = startGame;
 window.handleDecision = handleDecision;
+window.handleLocalDraftDecision = handleLocalDraftDecision;
 window.closeConsequence = closeConsequence;
 window.openValueInfo = openValueInfo;
 window.openValuesOverview = openValuesOverview;
