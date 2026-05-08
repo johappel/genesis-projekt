@@ -20,6 +20,7 @@ function createResetSnapshot(): StateSnapshot {
 }
 
 const RELAY_URL = 'ws://localhost:7000/';
+const shouldSkipInCi = process.env.CI === 'true' && process.env.RUN_RELAY_SMOKE_TESTS !== '1';
 
 const destroyCallbacks: Array<() => void> = [];
 
@@ -31,7 +32,7 @@ afterEach(() => {
 });
 
 describe('NostrRelayBus smoke', () => {
-  it(
+  (shouldSkipInCi ? it.skip : it)(
     'traegt host-autoritativen Join-, Claim-, Vote- und Round-Close-Flow ueber das lokale Relay',
     async () => {
       const gameId = `smoke-${crypto.randomUUID()}`;
