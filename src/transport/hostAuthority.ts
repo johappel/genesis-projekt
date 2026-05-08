@@ -8,7 +8,7 @@ import {
   normalizePaktAnswers,
 } from '../game/engine/pakt.js';
 import { getNextPendingRole, haveAllActiveRolesVoted } from '../game/engine/voting.js';
-import { MULTIPLAYER_TUNING } from './config.js';
+import { MULTIPLAYER_TUNING } from '../config.js';
 import { GAMEPLAY_TIMING } from '../game/config.js';
 import { LENSES } from '../game/data/lenses.js';
 import type { PaktArticleId, PaktArticleVote, PaktSubmission } from '../game/types.js';

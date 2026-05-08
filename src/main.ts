@@ -39,7 +39,7 @@ import {
   readMultiplayerUrlConfig,
   RelayMultiplayerRuntime,
 } from './transport/runtime.js';
-import { MULTIPLAYER_DEFAULTS, MULTIPLAYER_TUNING } from './transport/config.js';
+import { MULTIPLAYER_DEFAULTS, MULTIPLAYER_TUNING } from './config.js';
 import type { TransportEvent } from './transport/types.js';
 
 // ============================================================

@@ -1,117 +1,194 @@
-# AGENTS.md - Genesis Projekt
+# AGENTS.md – Genesis-Projekt
 
-## Projektauftrag
+## Projektstatus
 
-Dieses Repository entsteht als eigenstaendiges Browserspiel auf Basis von:
+Die Migration aus `Spiel-A.html` ist abgeschlossen. Das Spiel läuft als vollständige Vite-TypeScript-Anwendung mit:
 
-`F:\code\claude-code\KI und Theologie\Browserspiele-Genesis-Code\Spiel-A.html`
+- Single-Device-Modus (Singleplayer und mehrere Personen am selben Gerät)
+- Multiplayer über Nostr-Relay (3-Spieler-Betrieb bestätigt, host-autoritativ)
+- 7 spielbaren Fällen, 6 Rollen, 9 Enden, Pakt-Finale
+- 65 automatisierten Tests (Vitest), alle grün
 
-Ziel ist ein rundenbasiertes kooperatives Spiel zu KI, Verantwortung, Theologie und demokratischer Entscheidungsfindung. Spieler:innen oder Gruppen uebernehmen jeweils ein anderes Ratsmitglied im "Rat fuer KI, Mensch und Verantwortung".
+`Spiel-A.html` verbleibt im Repository als Referenz, wird aber nicht mehr gepflegt.
 
-## Kernidee
+---
 
-- Jede Rolle beziehungsweise jedes Ratsmitglied darf pro Partie nur einmal vergeben werden.
-- Alle aktiven Ratsmitglieder stimmen pro Fall/Runde ab.
-- Die Stadtbilanz wird erst am Ende der Runde berechnet, wenn alle aktiven Ratsmitglieder abgestimmt haben.
-- Entscheidungen sollen als gemeinsame Ratsentscheidung sichtbar werden, nicht als Sofortaktion einer Einzelrolle.
-- Das Spiel soll zunaechst als Single-Device-Version funktionieren und spaeter um Multiplayer erweitert werden.
+## Dokumentation – Pflichtlektüre vor jedem Patch
 
-## Spielmodi
+Vor jeder Änderung die relevante Dokumentation lesen:
 
-### Single Device
+| Dokument | Inhalt |
+|---|---|
+| `docs/game-flow.md` | Vollständiger Spielfluss, alle Phasen, alle Trigger und Übergänge |
+| `docs/state-model.md` | Komplettes `GameState`-Modell, alle Felder, Startwerte, Werteskalen |
+| `docs/multiplayer-transport.md` | Alle 13 Transport-Events, Validierungsregeln, Timing, `getMergedSnapshot()` |
+| `docs/debugging.md` | Breakpoints, typische Fehlerszenarien, URL-Parameter, Invarianten |
+| `docs/tasks_0001.md` | Aktuell offene Aufgaben |
 
-- Mehrere Spieler:innen sitzen am selben Geraet.
-- Rollen werden zu Beginn eindeutig verteilt.
-- Pro Runde stimmen die Rollen nacheinander ab.
-- Die UI muss klare Uebergaben zwischen Spieler:innen unterstuetzen.
-- Optional koennen einzelne Stimmen verdeckt abgegeben werden, bevor die gemeinsame Auswertung erscheint.
+Dokumentation muss aktuell gehalten werden: Wer eine Funktion, ein Feld oder ein Event ändert, aktualisiert die entsprechende Doku im selben Patch.
 
-### Multiplayer
+---
 
-- Mehrere Browser nehmen an derselben Spielsitzung teil.
-- Synchronisation erfolgt perspektivisch ueber einen Messagebus.
-- Als moegliche Transportebene ist ein vorhandenes Nostr Relay vorgesehen.
-- Multiplayer darf erst implementiert werden, wenn die lokale Engine deterministisch und testbar ist.
+## Architektur – aktueller Zustand
+
+```
+src/
+  main.ts                  ← UI-Orchestrator, ~3200 Zeilen (kein Framework)
+  config.ts                ← Zentrale Konfiguration (Relay-URL, Multiplayer-Timing)
+  style.css
+  game/
+    types.ts               ← Alle Spieltypen (GameState, Role, Lens, ...)
+    config.ts              ← Spielkonstanten (Timerwerte, Schwellen)
+    data/
+      roles.ts             ← 6 Rollen mit Sonderfähigkeiten
+      cases.ts             ← 7 Fälle mit Entscheidungsoptionen und Effekten
+      lenses.ts            ← Analyse-Linsen
+      endings.ts           ← 9 Enden mit Bedingungen
+      balance.ts           ← Startwerte, Skalen, Schwellen, Labels
+      facts.ts             ← Fakten- und Quellenmodell
+      uiText.ts            ← Alle UI-Texte
+    engine/
+      createGame.ts        ← createGame() → serialisierbarer Startzustand
+      roles.ts             ← assignRole(), sortRolesByCanonicalOrder()
+      voting.ts            ← castVote(), determineRoundDecision(), beginTieBreak(), getNextPendingRole()
+      rounds.ts            ← closeRound(), getAppliedRoundEffect(), applySystemicConsequences()
+      pakt.ts              ← Pakt-Submission, Pakt-Voting, deriveResolvedPakt()
+    rules/
+      abilities.ts         ← Sonderfähigkeiten-Prüflogik
+  transport/
+    types.ts               ← TransportEvent, StateSnapshot, alle Event-Typen
+    session.ts             ← Ephemere Session, Schlüsselgenerierung, Reload-Wiederverwendung
+    eventFactory.ts        ← TransportEventFactory mit Seq-Zähler
+    localBus.ts            ← Lokaler Mock-Transport (für Tests)
+    nostrRelayBus.ts       ← Nostr-Relay via nostr-tools SimplePool
+    hostAuthority.ts       ← HostAuthority: Validierung, acceptedVotesByPhase, getMergedSnapshot()
+    runtime.ts             ← RelayMultiplayerRuntime: Event-Routing, Recovery, Role-Ownership
+
+tests/
+  abilities.test.ts
+  cases-balance.test.ts
+  createGame.test.ts
+  endings.test.ts
+  game-config.test.ts
+  nostr-relay-smoke.test.ts
+  roles.test.ts
+  rounds.test.ts
+  transport.test.ts        ← enthält Regression für Turn-Order-Fix in getMergedSnapshot()
+  voting.test.ts
+
+docs/                      ← Pflichtige Spezifikation und Debug-Guides
+index.html                 ← Einzel-HTML, alle Screens per CSS togglebar
+```
+
+---
+
+## Invarianten – dürfen durch keinen Patch verletzt werden
+
+Diese Regeln sind durch Tests und Architektur abgesichert. Vor und nach jedem Patch prüfen:
+
+### Engine-Invarianten
+
+1. **Engine-Funktionen sind pure.** `castVote()`, `closeRound()`, `assignRole()`, `determineRoundDecision()`, `deriveResolvedPakt()` und alle anderen Engine-Funktionen in `src/game/engine/` empfangen State und geben neuen State zurück. Sie lesen keinen globalen State, mutieren kein DOM, schreiben kein Storage.
+
+2. **Werte werden erst bei `closeRound()` verändert.** Kein Code-Pfad darf `state.values` oder `state.macht` außerhalb von `closeRound()` → `applyEffect()` ändern. Sonderfähigkeiten modifizieren den `BalanceEffect` vor dem Aufruf, nicht danach.
+
+3. **`state.activeRoles` ist immer kanonisch sortiert.** `sortRolesByCanonicalOrder()` muss nach jeder Rollenzuweisung aufgerufen werden. Die Reihenfolge ist die Reihenfolge in `src/game/data/roles.ts`.
+
+4. **`state.roundVotes` Schlüssel sind roleIds, nicht playerIds.** Kein Namensraum-Mischen.
+
+5. **`state.currentCase` zählt nur aufwärts.** Kein Zurückspringen in abgeschlossene Fälle.
+
+6. **`GameState` bleibt JSON-serialisierbar.** Keine Funktionen, keine zirkulären Referenzen, keine DOM-Elemente im State.
+
+### Multiplayer-Invarianten
+
+7. **Der Host ist die einzige Wahrheitsquelle.** Clients wenden Effekte erst nach einem `accepted`-Event an. `state`-Änderungen auf Client-Seite aus `requested`-Events sind verboten.
+
+8. **`getMergedSnapshot()` leitet den nächsten Zug vom letzten akzeptierten Vote ab**, nicht von `currentRoleIndex` des Host-State. Dieser Fix verhindert Turn-Order-Drift nach Reconnects. Regression: `tests/transport.test.ts` → "leitet bei state-sync den naechsten Zug vom zuletzt akzeptierten Vote ab".
+
+9. **`phaseKey` und `roundId` müssen in jedem Vote-Event übereinstimmen.** Ein Vote mit falschem `phaseKey` (z.B. aus einer abgelaufenen Stichwahl) wird mit `PHASE_MISMATCH` abgelehnt.
+
+10. **`clearPendingMultiplayerRequest()` darf im `state-sync-sent`-Handler nicht aufgerufen werden, wenn ein Vote in-flight ist und der Snapshot die Stimme noch nicht enthält.** Guard in `handleMultiplayerTransportEvent()` → case `'state-sync-sent'`:
+    ```typescript
+    const pendingVoteNotYetConfirmed =
+      pendingMultiplayerRequest?.kind === 'vote' &&
+      localOwnedRole != null &&
+      !event.snapshot.state.roundVotes[localOwnedRole.id];
+    if (!pendingVoteNotYetConfirmed) {
+      clearPendingMultiplayerRequest();
+    }
+    ```
+    Dieser Guard verhindert Doppel-Submits durch vorgemerkte Votes. Nicht entfernen.
+
+11. **Keine persistenten privaten Nostr-Schlüssel.** `session.ts` generiert ephemere Keys. Bei Reload wird Session aus `sessionStorage` wiederverwendet. Bei frischer Navigation (neuem Tab) neue Session. Keine `nsec`-Werte in Git, Logs, Tests oder Dokumentation.
+
+12. **Eingehende Relay-Events deduplizieren.** `RelayMultiplayerRuntime` hält `seenEventIds`. Jeder Event-Handler muss davon ausgehen, dass ein Event mehrfach zugestellt werden kann.
+
+### UI-Invarianten
+
+13. **Keine Bilanzlogik in `main.ts`.** `main.ts` ruft Engine-Funktionen auf und rendert deren Ergebnis. Wertberechnungen gehören nach `src/game/engine/`.
+
+14. **Kein unvalidiertes innerHTML aus Netzwerkdaten.** `pushMultiplayerDebugEntry()` mit `innerHTML` ist nur für Debug-Panel (`?debug=1`) zugelassen. Spielzustand und Relay-Inhalte dürfen niemals direkt als HTML gerendert werden.
+
+15. **Transiente UI-Variablen gehören nicht in `GameState`.** `pendingDecision`, `pendingMultiplayerRequest`, `queuedMultiplayerVote`, Timer-IDs und `pendingOverlayAction` sind lokale `let`-Variablen in `main.ts`, nicht Teil des serialisierbaren Zustands.
+
+---
+
+## Wo was geändert wird
+
+| Änderung | Dateien |
+|---|---|
+| Spielinhalt (Texte, Fälle, Rollen) | `src/game/data/` |
+| Balancing-Werte, Schwellen | `src/game/data/balance.ts`, `src/game/data/cases.ts` |
+| UI-Texte | `src/game/data/uiText.ts` |
+| Spielregeln (Voting, Runden, Sonderfähigkeiten) | `src/game/engine/`, `src/game/rules/` |
+| Neue Screens, UI-Flows | `main.ts` + `index.html` |
+| Multiplayer-Validierung | `src/transport/hostAuthority.ts` |
+| Relay-Verbindung, Session | `src/transport/nostrRelayBus.ts`, `src/transport/session.ts` |
+| Timing-Konfiguration | `src/config.ts` |
+| Neue Transport-Events | `src/transport/types.ts` + `src/transport/eventFactory.ts` + `src/transport/hostAuthority.ts` + `main.ts` |
+
+---
+
+## Bevor du einen Patch einreichst
+
+1. **Tests laufen lassen:** `npx vitest run` – alle 65 müssen grün sein.
+2. **Build prüfen:** `npm run build` – kein TypeScript-Fehler, keine Vite-Fehler.
+3. **Relevante Invarianten (oben) für den geänderten Bereich durchlesen.**
+4. **Dokumentation aktualisieren** wenn du ein Feld, eine Funktion oder ein Event änderst.
+5. **Neue Spielregeln zuerst testen**, dann implementieren.
+
+---
 
 ## Sicherheits- und Reputationsregeln
 
-- Keine dauerhaften privaten Nostr-Schluessel im Browser speichern.
-- Keine realen personenbezogenen Daten fuer Spielbeitritt, Rollenwahl oder Abstimmung verlangen.
-- Wenn Nostr genutzt wird, nur temporaere Sitzungsschluessel verwenden.
+- Keine dauerhaften privaten Nostr-Schlüssel im Browser speichern.
+- Keine realen personenbezogenen Daten für Spielbeitritt, Rollenwahl oder Abstimmung verlangen.
+- Nur temporäre Sitzungsschlüssel verwenden (`src/transport/session.ts`).
 - Keine echten `nsec`-Werte in Git, Logs, Screenshots, Testdaten oder Dokumentation ablegen.
 - Keine geheimen Relay-Zugangsdaten committen.
-- Multiplayer-Nachrichten muessen mindestens `gameId`, `roundId`, `roleId`, `playerId`, `seq` und einen klar typisierten Eventnamen enthalten.
-- Eingehende Multiplayer-Events duerfen nie blind vertraut werden. Sie muessen gegen aktuellen Spielstatus, Rollenbesitz und Rundennummer validiert werden.
-- Replay- und Doppelabstimmungen muessen verhindert werden.
-- Bei Inhalten zu autonomen Waffen, Diskriminierung, Triage, Bildung, Ueberwachung und Gesundheitsdaten immer verantwortungsvoll formulieren und reputationssensible Aussagen pruefen.
-- Ethische und wissenschaftliche Aussagen sollen nicht als gesicherte Fakten erscheinen, wenn sie eher narrative Spielannahmen sind.
+- Eingehende Multiplayer-Events müssen gegen aktuellen Spielstatus, Rollenbesitz und Rundennummer validiert werden – nie blind vertrauen.
+- Replay- und Doppelabstimmungen müssen verhindert werden (phaseKey-Prüfung, seenEventIds).
+- Bei Inhalten zu autonomen Waffen, Diskriminierung, Triage, Bildung, Überwachung und Gesundheitsdaten: verantwortungsvoll formulieren, Reputationsrisiken markieren.
+- Ethische und wissenschaftliche Aussagen sind Spielnarrativ, keine gesicherten Fakten – in `src/game/data/facts.ts` mit `status: 'needs-source'` oder `'fictional'` markieren.
 
-## Architekturleitlinien
+---
 
-Die urspruengliche Einzeldatei soll nicht einfach weiter anwachsen. Neue Arbeit soll in getrennte Module aufgeteilt werden:
+## Technische Qualitätskriterien
 
-- `src/game/data`: Rollen, Faelle, Linsen, Enden, Texte.
-- `src/game/engine`: reiner Spielzustand, Rundenlogik, Rollenvergabe, Abstimmungen, Bilanzwertung.
-- `src/game/rules`: Auswertungsregeln, Sonderfaehigkeiten, Konsens-/Mehrheitslogik.
-- `src/transport`: lokaler Transport, spaeter Nostr-Transport.
-- `src/ui`: Komponenten, Screens, Eingabeflows.
-- `src/persistence`: lokale Speicherung, Export/Import von Sitzungen.
-
-Die Engine soll moeglichst frameworkunabhaengig bleiben. UI-Code darf keine Bilanzlogik enthalten.
-
-## Empfohlener Entwicklungszuschnitt
-
-1. Neues Projekt scaffolden.
-2. Daten aus `Spiel-A.html` strukturiert extrahieren.
-3. Reine Game-Engine fuer Single-Device bauen.
-4. Rollenvergabe und Rundenvoting implementieren.
-5. Bilanzwertung erst nach vollstaendiger Abstimmung anwenden.
-6. Tests fuer Rollenvergabe, Voting, Rundenauswertung und Sonderfaehigkeiten schreiben.
-7. UI fuer Single-Device fertigstellen.
-8. Transport-Interface definieren.
-9. Lokalen Mock-Transport bauen.
-10. Nostr-Transport nur hinter klarer Validierung und ohne persistente private Keys ergaenzen.
-
-## Spielregeln fuer die erste Version
-
-- Eine Partie besteht aus mehreren Faellen.
-- Zu Beginn wird festgelegt, welche Ratsmitglieder aktiv sind.
-- Jede aktive Rolle hat genau eine Stimme pro Fall.
-- Eine Rolle kann pro Runde nur einmal abstimmen.
-- Solange nicht alle aktiven Rollen abgestimmt haben, werden keine Werte veraendert.
-- Nach der letzten Stimme wird die Gruppenentscheidung bestimmt.
-- Danach werden Konsequenz, Bilanzveraenderung, Reflexionsfrage und Protokoll angezeigt.
-- Sonderfaehigkeiten duerfen den Rundenablauf beeinflussen, muessen aber deterministisch im Spielprotokoll nachvollziehbar sein.
-
-## Offene Designentscheidungen
-
-Vor Implementierung klaeren oder als explizite Annahme dokumentieren:
-
-- Wird nach Mehrheit, Konsens, Stichwahl oder moderierter Entscheidung ausgewertet?
-- Sind Abstimmungen offen oder verdeckt?
-- Darf eine Rolle sich enthalten?
-- Was passiert bei Gleichstand?
-- Haben Gruppenrollen andere Regeln als Einzelpersonen?
-- Koennen Rollen im Multiplayer nach Verbindungsabbruch neu beansprucht werden?
-- Soll die Partie ohne Server wiederherstellbar sein?
-- Welche Inhalte brauchen Quellenangaben oder didaktische Hinweise?
-
-## Technische Qualitaetskriterien
-
-- Spielzustand serialisierbar halten.
-- Engine-Funktionen als pure Funktionen bevorzugen.
-- Tests fuer jede Regel schreiben, bevor Multiplayer-Transport ergaenzt wird.
+- Engine-Funktionen als pure Funktionen.
+- Spielzustand JSON-serialisierbar.
+- Tests für jede neue Spielregel vor der Implementierung.
 - Keine Logik an DOM-IDs koppeln.
-- Keine globalen Mutable-State-Muster aus der alten HTML-Datei uebernehmen.
-- Keine unvalidierten HTML-Strings aus Netzwerkdaten rendern.
-- UI muss auf Desktop, Tablet und Mobil nutzbar bleiben.
-- Texte sollen deutsch, klar und didaktisch belastbar sein.
+- Kein globaler Mutable-State außerhalb von `main.ts`.
+- UI auf Desktop, Tablet und Mobil nutzbar.
+- Texte deutsch, klar, didaktisch belastbar.
 
-## Arbeitsstil fuer Agenten
+---
 
-- Bestehende Inhalte aus `Spiel-A.html` respektieren, aber nicht unkritisch kopieren.
+## Arbeitsstil
+
+- Kleine, nachvollziehbare Änderungen bevorzugen.
+- Vor größeren Architekturentscheidungen die Annahme in `docs/` dokumentieren.
+- Offene Tasks in `docs/tasks_0001.md` sichtbar halten.
 - Bei theologischen, ethischen oder wissenschaftlichen Aussagen zwischen Spielnarrativ, Werturteil und belegbarer Tatsache unterscheiden.
-- Reputationsrisiken aktiv markieren und konkrete Verbesserungen vorschlagen.
-- Unabgeschlossene Tasks sichtbar halten und klaeren, ob sie fortgesetzt, zurueckgestellt oder gestrichen werden sollen.
-- Kleine, nachvollziehbare Commits und Aenderungen bevorzugen.
-- Vor groesseren Architekturentscheidungen die Annahmen dokumentieren.

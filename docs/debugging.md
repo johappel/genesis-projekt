@@ -10,7 +10,7 @@
 | `?mp=join` | Browser wird Client |
 | `?timing=kurz` | Kurze Timer (schnelle Tests) |
 
-Kombinierbar: `http://localhost:4173/?mp=host&game=genesis-test&relay=http://localhost:7000/&debug=1&dev`
+Kombinierbar: `http://localhost:4173/?mp=host&game=genesis-test&relay=ws://localhost:7000/&debug=1&dev`
 
 ---
 
@@ -160,7 +160,7 @@ const latestAcceptedVote = acceptedVotes.reduce(...);
 
 ### Recovery-Timeout feuert zu früh / zu spät
 
-Recovery-Timeout = 900 ms (in `config.ts`).
+Recovery-Timeout = 900 ms (in `src/config.ts`).
 
 | Situation | Erklärung |
 |---|---|

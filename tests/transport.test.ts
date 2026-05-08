@@ -1870,10 +1870,10 @@ describe('toRelayWebSocketUrl', () => {
 
 describe('readMultiplayerUrlConfig', () => {
   it('liest host-konfiguration aus der URL', () => {
-    expect(readMultiplayerUrlConfig('?mp=host&game=abc123&relay=http://localhost:7000/')).toEqual({
+    expect(readMultiplayerUrlConfig('?mp=host&game=abc123&relay=ws://localhost:7000/')).toEqual({
       mode: 'host',
       gameId: 'abc123',
-      relayUrl: 'http://localhost:7000/',
+      relayUrl: 'ws://localhost:7000/',
     });
   });
 
@@ -1887,15 +1887,15 @@ describe('createRelayJoinUrl', () => {
     expect(createRelayJoinUrl('http://localhost:5173/?mp=host&game=abc123', {
       mode: 'host',
       gameId: 'abc123',
-      relayUrl: 'http://localhost:7000/',
-    })).toBe('http://localhost:5173/?mp=join&game=abc123&relay=http%3A%2F%2Flocalhost%3A7000%2F');
+      relayUrl: 'ws://localhost:7000/',
+    })).toBe('http://localhost:5173/?mp=join&game=abc123&relay=ws%3A%2F%2Flocalhost%3A7000%2F');
   });
 });
 
 describe('Relay-Fehlermeldungen', () => {
   it('formatiert einen klaren Hinweis fuer ein nicht erreichbares Relay', () => {
-    expect(formatRelayIssueMessage('http://localhost:7000/')).toBe(
-      'Das angegebene Relay http://localhost:7000/ ist nicht erreichbar. Prüfe die URL oder starte den Relay-Server.'
+    expect(formatRelayIssueMessage('ws://localhost:7000/')).toBe(
+      'Das angegebene Relay ws://localhost:7000/ ist nicht erreichbar. Prüfe die URL oder starte den Relay-Server.'
     );
 
     expect(formatRelayIssueMessage('ws://relay.invalid', 'Connection refused')).toBe(

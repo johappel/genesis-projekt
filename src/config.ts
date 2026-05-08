@@ -1,5 +1,5 @@
 export const MULTIPLAYER_DEFAULTS = {
-  relayUrl: 'http://localhost:7000/',
+  relayUrl: 'ws://relay.nostr.net/',
   roomCodePrefix: 'genesis',
 } as const;
 

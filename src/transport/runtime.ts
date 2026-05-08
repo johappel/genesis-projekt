@@ -1,6 +1,6 @@
 import type { GameState } from '../game/types.js';
 
-import { MULTIPLAYER_DEFAULTS, MULTIPLAYER_TUNING } from './config.js';
+import { MULTIPLAYER_DEFAULTS, MULTIPLAYER_TUNING } from '../config.js';
 import { TransportEventFactory } from './eventFactory.js';
 import { HostAuthority } from './hostAuthority.js';
 import { NostrRelayBus } from './nostrRelayBus.js';

@@ -19,7 +19,7 @@ function createResetSnapshot(): StateSnapshot {
   };
 }
 
-const RELAY_URL = 'http://localhost:7000/';
+const RELAY_URL = 'ws://localhost:7000/';
 
 const destroyCallbacks: Array<() => void> = [];
 

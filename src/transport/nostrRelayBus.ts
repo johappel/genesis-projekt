@@ -3,7 +3,7 @@ import { finalizeEvent } from 'nostr-tools/pure';
 import type { Event as NostrEvent, EventTemplate } from 'nostr-tools/pure';
 import type { Filter } from 'nostr-tools/filter';
 
-import { MULTIPLAYER_TUNING } from './config.js';
+import { MULTIPLAYER_TUNING } from '../config.js';
 import type { TransportEvent, TransportMessageBus } from './types.js';
 import type { EphemeralTransportSession } from './session.js';
 

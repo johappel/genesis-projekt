@@ -236,7 +236,7 @@ Host-Browser                Relay                    Clients
 
 ## Multiplayer-Timing-Konfiguration
 
-Alle Werte in `src/transport/config.ts`:
+Alle Werte in `src/config.ts`:
 
 | Parameter | Wert | Bedeutung |
 |---|---|---|
@@ -361,10 +361,10 @@ shouldReusePersistedSession()
 | `?mp=host` | host | Host-Browser, HostAuthority aktiv |
 | `?mp=join` | join | Client-Browser |
 | `?game=genesis-XXXXXX` | Room-Code | Nostr-Subscription-Filter |
-| `?relay=http://...` | URL | Relay-Server-Adresse |
+| `?relay=ws://...` | URL | Relay-Server-Adresse |
 
-Beispiel-URL für Host: `http://localhost:4173/?mp=host&game=genesis-5c8e7a&relay=http://localhost:7000/`  
-Beispiel-URL für Client: `http://localhost:4173/?mp=join&game=genesis-5c8e7a&relay=http://localhost:7000/`
+Beispiel-URL für Host: `http://localhost:4173/?mp=host&game=genesis-5c8e7a&relay=ws://localhost:7000/`  
+Beispiel-URL für Client: `http://localhost:4173/?mp=join&game=genesis-5c8e7a&relay=ws://localhost:7000/`
 
 Die Invite-URL wird automatisch generiert und in der UI als kopierbares Feld angezeigt.
 
