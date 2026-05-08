@@ -1274,7 +1274,16 @@ function handleMultiplayerTransportEvent(event: TransportEvent): void {
 
   if (event.eventName === 'state-sync-sent') {
     const activeScreenBeforeSync = document.querySelector('.screen.active')?.id;
-    clearPendingMultiplayerRequest();
+    // Pending-Vote-Request nur löschen, wenn der State-Sync die Stimme bereits bestätigt.
+    // Sonst würde maybeAutoSubmitQueuedVote() erneut feuern und einen Doppel-Submit auslösen.
+    const localOwnedRole = getLocalOwnedRole();
+    const pendingVoteNotYetConfirmed =
+      pendingMultiplayerRequest?.kind === 'vote' &&
+      localOwnedRole != null &&
+      !event.snapshot.state.roundVotes[localOwnedRole.id];
+    if (!pendingVoteNotYetConfirmed) {
+      clearPendingMultiplayerRequest();
+    }
     resetTransientMultiplayerUi();
     state = event.snapshot.state;
     synchronizeDerivedPaktState();
