@@ -204,7 +204,6 @@ npm run dev
 Öffnet den Dev-Server unter `http://localhost:4173/`.
 
 ### Tests
-
 ```bash
 npx vitest run      # Einmalig (65 Tests)
 npx vitest          # Watch-Modus
